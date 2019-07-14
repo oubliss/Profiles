@@ -196,7 +196,7 @@ class Raw_Profile():
                     # Create array of lists with two lists per temperature
                     # sensor reported in the data file - one for temperature
                     # and one for resistance - plus one for times
-                    temp_list = [[] for x in range(sum('Temp' in s for s in
+                    temp_list = [[] for x in range(sum('T' in s for s in
                                  elem["data"].keys()) * 2 + 1)]
 
                     sensor_names["IMET"] = {}
@@ -204,8 +204,8 @@ class Raw_Profile():
                     sensor_numbers = np.add(range(int((len(temp_list)-1) / 2)),
                                             1)
                     for num in sensor_numbers:
-                        sensor_names["IMET"]["Temp"+str(num)] = 2*num - 2
-                        sensor_names["IMET"]["Resi"+str(num)] = 2*num - 1
+                        sensor_names["IMET"]["T"+str(num)] = 2*num - 2
+                        sensor_names["IMET"]["R"+str(num)] = 2*num - 1
                     sensor_names["IMET"]["Time"] = -1
 
                 # Read fields into temp_list, including Time
@@ -242,8 +242,8 @@ class Raw_Profile():
                     # Determine field names
                     sensor_numbers = np.add(range(int((len(rh_list)-1)/2)), 1)
                     for num in sensor_numbers:
-                        sensor_names["RHUM"]["Humi"+str(num)] = 2*num - 2
-                        sensor_names["RHUM"]["Temp"+str(num)] = 2*num - 1
+                        sensor_names["RHUM"]["H"+str(num)] = 2*num - 2
+                        sensor_names["RHUM"]["T"+str(num)] = 2*num - 1
                     sensor_names["RHUM"]["Time"] = -1
 
                 # Read fields into rh_list, including Time
@@ -255,9 +255,9 @@ class Raw_Profile():
                                 raise KeyError("Time formatted incorrectly")
                             else:
                                 rh_list[value].append(time)
-                        elif 'Humi' in key:
+                        elif 'H' in key:
                             rh_list[value].append(elem["data"][key])
-                        elif 'Temp' in key:
+                        elif 'T' in key:
                             rh_list[value].append(elem["data"][key])
                     except KeyError:
                         rh_list[value].append(np.nan)
