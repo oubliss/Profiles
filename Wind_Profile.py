@@ -123,6 +123,10 @@ class Wind_Profile():
                                        units=self._units)
         self.u, self.v = metpy.calc.wind_components(self.speed, self.dir)
 
+        self.alt = utils.regrid_data(data=self.alt, data_times=time,
+                                     gridded_times=self.gridded_times,
+                                     units=self._units)
+
         #
         # save NC
         #

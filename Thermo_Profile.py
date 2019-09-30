@@ -92,7 +92,10 @@ class Thermo_Profile():
                             self._ascent_filename_tag + ".nc") \
            in os.listdir(self._datadir):
             print("Reading thermo_profile from pre-processed netCDF")
-            self._read_netCDF(file_path)
+            self._read_netCDF(file_path + "thermo_" +
+                            str(self.resolution.magnitude) +
+                            str(self.resolution.units) +
+                            self._ascent_filename_tag + ".nc")
             return
 
         temp = []
