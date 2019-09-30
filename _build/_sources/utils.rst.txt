@@ -1,0 +1,33 @@
+utils
+=====================
+
+.. autofunction:: utils.regrid_base
+.. autofunction:: utils.regrid_data
+.. function:: utils.temp_calib
+   Converts resistance to temperature using the coefficients for the \
+      sensor specified OR generalized coefficients if the serial number (sn)\
+      is not recognized.
+
+   :param list<Quantity> resistance: resistances recorded by temperature \
+      sensors
+   :param int sn: the serial number of the sensor reporting
+   :rtype: list<Quantity>
+   :return: list of temperatures in K
+
+   **Temperature Calibration**
+
+   Resistance (R) to temperature (T)
+
+   .. math::
+
+      \begin{aligned}
+      T &= \frac{1}{A + B (log{R}) + C (log{R})^3}
+      \end{aligned}
+
+   Coefficients are pulled from ./coefs/MasterCoefList.csv on your computer.
+
+   Equation from: Greene, B.R. Boundary Layer Profiling Using Rotary-Wing \
+      Unmanned Aircraft Systems: Filling the Atmospheric Data Gap. Master’s \
+      Thesis, The University of Oklahoma, Norman, OK, USA, 2018.
+.. autofunction:: utils.identify_profile
+.. autofunction:: utils.qc

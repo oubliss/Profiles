@@ -1,0 +1,215 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>Profile &#8212; Profile_Set 1.0.0 documentation</title>
+    <link rel="stylesheet" href="_static/agogo.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <script type="text/javascript" src="_static/language_data.js"></script>
+    <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Raw_Profile" href="Raw_Profile.html" />
+    <link rel="prev" title="Profiles: powered by CASS" href="index.html" /> 
+  </head><body>
+    <div class="header-wrapper" role="banner">
+      <div class="header">
+        <div class="headertitle"><a
+          href="index.html">Profile_Set 1.0.0 documentation</a></div>
+        <div class="rel" role="navigation" aria-label="related navigation">
+          <a href="index.html" title="Profiles: powered by CASS"
+             accesskey="P">previous</a> |
+          <a href="Raw_Profile.html" title="Raw_Profile"
+             accesskey="N">next</a> |
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a>
+        </div>
+       </div>
+    </div>
+
+    <div class="content-wrapper">
+      <div class="content">
+        <div class="document">
+            
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <div class="section" id="module-Profile">
+<span id="profile"></span><h1>Profile<a class="headerlink" href="#module-Profile" title="Permalink to this headline">¶</a></h1>
+<p>Manages data from a single flight or profile</p>
+<p>Authors Brian Greene, Jessica Blunt, Tyler Bell, Gus Azevedo</p>
+<p>Copyright University of Oklahoma Center for Autonomous Sensing and Sampling
+2019</p>
+<p>Component of Profiles v1.0.0</p>
+<dl class="class">
+<dt id="Profile.Profile">
+<em class="property">class </em><code class="descclassname">Profile.</code><code class="descname">Profile</code><span class="sig-paren">(</span><em>*args</em>, <em>**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#Profile.Profile" title="Permalink to this definition">¶</a></dt>
+<dd><p>A Profile object contains data from a profile (if altitude or pressure
+is specified under resolution) or flight (if the resolution is in units
+of time)</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Variables:</th><td class="field-body"><ul class="first last simple">
+<li><strong>dev</strong> (<em>bool</em>) – True if data is from developmental flights</li>
+<li><strong>resolution</strong> (<em>Quantity</em>) – resolution of the data in units of altitude or        pressure</li>
+<li><strong>indices</strong> (<em>tuple</em>) – the bounds of the profile to be processed as       (start_time, end_time)</li>
+<li><strong>dev</strong> – True if this is a non-operational flight</li>
+<li><strong>ascent</strong> (<em>bool</em>) – True if data from the ascending leg should be processed,       otherwise the descending leg will be processed instead</li>
+<li><strong>file_path</strong> (<em>String</em>) – the path to you .bin, .json, or .nc data file</li>
+<li><strong>gridded_times</strong> (<em>np.Array&lt;Datetime&gt;</em>) – the times at which data points are        generated</li>
+<li><strong>gridded_base</strong> (<em>np.Array&lt;Quantity&gt;</em>) – the value of the vertical coordinate       at each data point</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+<dl class="method">
+<dt id="Profile.Profile.__init__">
+<code class="descname">__init__</code><span class="sig-paren">(</span><em>*args</em>, <em>**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#Profile.Profile.__init__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Creates a Profile object.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>file_path</strong> (<em>string</em>) – data file</li>
+<li><strong>resolution</strong> (<em>int</em>) – resolution to which data should be
+calculated in units of altitude or pressure</li>
+<li><strong>res_units</strong> (<em>str</em>) – units of resolution in a format which can                    be parsed by pint</li>
+<li><strong>profile_num</strong> (<em>int</em>) – 1 or greater. Identifies profile when file                    contains multiple</li>
+<li><strong>ascent</strong> (<em>bool</em>) – True to use ascending leg of flight, False to use                    descending leg</li>
+<li><strong>dev</strong> (<em>bool</em>) – True if data is from a developmental flight</li>
+<li><strong>confirm_bounds</strong> – False to bypass user confirmation of                    automatically identified start, peak, and end times</li>
+<li><strong>index_list</strong> (<em>list&lt;tuple&gt;</em>) – Profile start, peak, and end indices if                   known - leave as None in most cases</li>
+<li><strong>scoop_id</strong> (<em>str</em>) – the sensor package used, if known</li>
+<li><strong>raw_profile</strong> (<a class="reference internal" href="Raw_Profile.html#Raw_Profile.Raw_Profile" title="Raw_Profile.Raw_Profile"><em>Raw_Profile</em></a>) – the partially-processed file - use                    this if you have it, there’s no need to make the computer do extra                    work.</li>
+<li><strong>profile_start_height</strong> (<em>int</em>) – if given, replaces prompt to user                    asking for starting height of a profile. Recommended value is None                   if you’re only processing one profile.</li>
+<li><strong>nc_level</strong> (<em>str</em>) – either ‘low’, or ‘none’. This parameter                    is used when processing non-NetCDF files to determine which types                    of NetCDF files will be generated. For individual files for each                    Raw, Thermo,                    and Wind Profile, specify ‘low’. For no NetCDF files, specify                    ‘none’.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="method">
+<dt id="Profile.Profile.__str__">
+<code class="descname">__str__</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#Profile.Profile.__str__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return str(self).</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="Profile.Profile.get_thermo_profile">
+<code class="descname">get_thermo_profile</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#Profile.Profile.get_thermo_profile" title="Permalink to this definition">¶</a></dt>
+<dd><p>If a Thermo_Profile object does not already exist, it is created
+when this method is called.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Returns:</th><td class="field-body">the Thermo_Profile object</td>
+</tr>
+<tr class="field-even field"><th class="field-name">Return type:</th><td class="field-body"><a class="reference internal" href="Thermo_Profile.html#Thermo_Profile.Thermo_Profile" title="Thermo_Profile.Thermo_Profile">Thermo_Profile</a></td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="method">
+<dt id="Profile.Profile.get_wind_profile">
+<code class="descname">get_wind_profile</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#Profile.Profile.get_wind_profile" title="Permalink to this definition">¶</a></dt>
+<dd><p>If a Wind_Profile object does not already exist, it is created when
+this method is called.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Returns:</th><td class="field-body">the Wind_Profile object</td>
+</tr>
+<tr class="field-even field"><th class="field-name">Return type:</th><td class="field-body"><a class="reference internal" href="Wind_Profile.html#Wind_Profile.Wind_Profile" title="Wind_Profile.Wind_Profile">Wind_Profile</a></td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+
+
+          </div>
+        </div>
+      </div>
+        </div>
+        <div class="sidebar">
+          <h3>Table of Contents</h3>
+          <p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Profile</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Raw_Profile.html">Raw_Profile</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Thermo_Profile.html">Thermo_Profile</a></li>
+<li class="toctree-l1"><a class="reference internal" href="utils.html">utils</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Profile_Set.html">Profile_Set</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Wind_Profile.html">Wind_Profile</a></li>
+</ul>
+
+          <div role="search">
+            <h3 style="margin-top: 1.5em;">Search</h3>
+            <form class="search" action="search.html" method="get">
+                <input type="text" name="q" />
+                <input type="submit" value="Go" />
+                <input type="hidden" name="check_keywords" value="yes" />
+                <input type="hidden" name="area" value="default" />
+            </form>
+          </div>
+        </div>
+        <div class="clearer"></div>
+      </div>
+    </div>
+
+    <div class="footer-wrapper">
+      <div class="footer">
+        <div class="left">
+          <div role="navigation" aria-label="related navigaton">
+            <a href="index.html" title="Profiles: powered by CASS"
+              >previous</a> |
+            <a href="Raw_Profile.html" title="Raw_Profile"
+              >next</a> |
+            <a href="py-modindex.html" title="Python Module Index"
+              >modules</a> |
+            <a href="genindex.html" title="General Index"
+              >index</a>
+          </div>
+          <div role="note" aria-label="source link">
+              <br/>
+              <a href="_sources/Profile.rst.txt"
+                rel="nofollow">Show Source</a>
+          </div>
+        </div>
+
+        <div class="right">
+          
+    <div class="footer" role="contentinfo">
+        &#169; Copyright 2019, Jessica Wiedemeier, Tyler Bell, Brian Green, Gus Azevedo.
+      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 1.8.3.
+    </div>
+        </div>
+        <div class="clearer"></div>
+      </div>
+    </div>
+
+  </body>
+</html>
