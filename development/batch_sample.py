@@ -14,13 +14,6 @@ from profiles import plotting
 datadir = '/home/jessica/GitHub/data_templates/20191014'
 # Example using Profiles
 a = Profile_Set(resolution=15, res_units='Pa', ascent=True, dev=True,
-<<<<<<< Updated upstream:development/batch_sample.py
-                confirm_bounds=False, profile_start_height=365)
-for file_name in os.listdir(datadir):
-    if ".json" in file_name:
-        a.add_all_profiles(os.path.join(datadir, file_name))
-
-=======
                 confirm_bounds=False, profile_start_height=365,
                 nc_level="none")
 for file_name in os.listdir(datadir):
@@ -28,7 +21,6 @@ for file_name in os.listdir(datadir):
         a.add_all_profiles(os.path.join(datadir, file_name),
                            meta_path_flight="/home/jessica/GitHub/Utilities/Logs/20191115_1212N963UA (CS3D)_flight_log.csv",
                            meta_path_header="/home/jessica/GitHub/Utilities/Logs/20191115N963UA (CS3D)_log_header.csv")
->>>>>>> Stashed changes:development/batch_sample.py
 
 a.save_netCDF("pancake.nc")
 '''
@@ -58,5 +50,4 @@ for p in a.profiles:
 fig = plotting.contour_height_time(a.profiles,
                                      var=['theta', 'q'],
                                      use_pres=True)
-plt.savefig("yay2.png")
 fig.show()
