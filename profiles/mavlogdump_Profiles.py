@@ -10,6 +10,7 @@ Original code from CASS/pymavlink heavily editted to fit this project
 '''
 from __future__ import print_function
 
+import array
 import fnmatch
 import json
 import os
@@ -140,14 +141,14 @@ def process(args):
     if istlog and args.format == 'csv':  # we know our fields from the get-go
         try:
             currentOffset = 1  # Store num fields for each message.
-            for type in types:
+            for t in types:
                 try:
-                    typeClass = "MAVLink_{0}_message".format(type.lower())
-                    fields += [type + '.' + x for x in
+                    typeClass = "MAVLink_{0}_message".format(t.lower())
+                    fields += [t + '.' + x for x in
                                inspect.getargspec(
                                        getattr(mavutil.mavlink, typeClass)
                                        .__init__).args[1:]]
-                    offsets[type] = currentOffset
+                    offsets[t] = currentOffset
                     currentOffset += len(fields)
                 except IndexError:
                     quit()
@@ -275,6 +276,12 @@ def process(args):
             if args.show_source:
                 meta["srcSystem"] = m.get_srcSystem()
                 meta["srcComponent"] = m.get_srcComponent()
+
+            # convert any array.array (e.g. packed-16-bit fft readings) into lists:
+            for key in data.keys():
+                if type(data[key]) == array.array:
+                    data[key] = list(data[key])
+
             outMsg = {"meta": meta, "data": data}
 
             # Now print out this object with stringified properly.
@@ -300,7 +307,7 @@ def process(args):
         # CSV format outputs columnar data with a user-specified delimiter
         elif args.format == 'csv':
             data = m.to_dict()
-            type = m.get_type()
+            mtype = m.get_type()
 
             # If this message has a duplicate timestamp, copy its data into the
             # existing data list. Also
@@ -311,7 +318,7 @@ def process(args):
                                for y in fields]
                 else:
                     newData = [str(data[y.split('.')[-1]]) if
-                               y.split('.')[0] == type and y.split('.')[-1]
+                               y.split('.')[0] == mtype and y.split('.')[-1]
                                in data else "" for y in fields]
 
                 for i, val in enumerate(newData):
@@ -328,7 +335,7 @@ def process(args):
                                else "" for y in fields]
                 else:
                     csv_out = [str(data[y.split('.')[-1]]) if
-                               y.split('.')[0] == type and y.split('.')[-1]
+                               y.split('.')[0] == mtype and y.split('.')[-1]
                                in data else "" for y in fields]
         # Otherwise we output in a standard Python dict-style format
         else:
