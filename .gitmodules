@@ -1,0 +1,6 @@
+[submodule "dronelogbook"]
+	path = dronelogbook
+	url = git@github.com:oucass/oucass-DroneLogbook.git
+[submodule "SensorCoefficients"]
+	path = SensorCoefficients
+	url = https://github.com/oucass/SensorCoefficients
