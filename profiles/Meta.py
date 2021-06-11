@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import dronelogbook as dlb
 
 class Meta:
     """ Processes, stores, and writes metadata files (JSON-LD for public, CSV
@@ -13,7 +14,7 @@ class Meta:
           file
     """
 
-    def __init__(self, header_path=None, flight_path=None):
+    def __init__(self, header_path=None, flight_path=None, guid=None):
         """ Creates new object of type Meta from header file and flight file.
         Details about the input files can be found at the bottom of this page.
 
@@ -30,8 +31,7 @@ class Meta:
                                "emergency_landing", "emergency_remarks",
                                "private_remarks"]
         self.public_fields = ["date_utc", "region", "location", "objective",
-                              "cloud", "rain", "wind_from_direction",
-                              "wind_speed", "wind_speed_of_gust",
+                              "cloud", "rain", "wind",
                               "surface_altitude", "launch_time_utc",
                               "max_achieved_alt", "land_time_utc", "remarks",
                               "variables", "platform_id", "platform_name"]
@@ -50,8 +50,6 @@ class Meta:
                            "scoop_id": None,
                            "battery_voltage_initial": None,
                            "launch_time_utc": None,
-                           "max_achieved_alt": None,
-                           "land_time_utc": None,
                            "battery_voltage_final": None,
                            "emergency_landing": None,  # Y/N
                            "emergency_remarks": None,
@@ -59,9 +57,7 @@ class Meta:
                            "region": None,  # default is north_america
                            "cloud": None,  # cloud cover in percent
                            "rain": None,  # Y or N
-                           "wind_from_direction": None,
-                           "wind_speed": None,
-                           "wind_speed_of_gust": None,
+                           "wind": None,
                            "surface_altitude": None,
                            "max_achieved_alt": None,
                            "land_time_utc": None,
@@ -70,8 +66,39 @@ class Meta:
                            "platform_name": None,  # copter type i.e. TonyShark3
                            }
 
-        self.read_file(header_path)
-        self.read_file(flight_path)
+        if header_path is not None:
+            self.read_file(header_path)
+
+        if header_path is not None:
+            self.read_file(flight_path)
+
+        if guid is not None:
+            self.get_metadata_from_dlb(guid)
+
+    def get_metadata_from_dlb(self, flight_guid):
+        conn = dlb.DLB()
+
+        flight = conn.get_flight(flight_guid, recursive=True)
+
+        self.all_fields['timestamp'] = flight.flight_time.strftime("%Y%m%d_%H%M%S")
+        self.all_fields['date_utc'] = flight.flight_time.strftime("%Y%m%d")
+        self.all_fields['launch_time_utc'] = flight.flight_time.strftime("%Y%m%d_%H%M%S")
+        self.all_fields['location'] = flight.place_name
+        self.all_fields['surface_altitude'] = flight.place.altitude
+
+        self.all_fields['checklist_operator'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Observer'][0]
+        self.all_fields['PIC'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Pilot'][0]
+        self.all_fields['GSO'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Payload operator'][0]
+
+        self.all_fields['authorization_type'] = flight.raw_data['legal_rule']
+        self.all_fields['platform_id'] = flight.drone.id_number
+        self.all_fields['max_achieved_alt'] = flight.raw_data['max_altitude_agl']
+
+        self.all_fields['scoop_id'] = [p for p in flight.drone.notes if 'Scoop' in p][0]
+        self.all_fields['platform_name'] = flight.drone.name
+
+        self.all_fields['cloud'] = flight.weather['CC']
+        self.all_fields['wind_speed'] = flight.weather['W']
 
     def read_file(self, csv_path):
         """ Copy data from the CSV file to the all_fields dictionary
