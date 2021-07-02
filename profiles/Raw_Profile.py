@@ -61,6 +61,8 @@ class Raw_Profile():
         self.baro = "BARO"
         self.serial_numbers = {}
         self.file_path = file_path
+        self.calib_temp = None
+        self.calib_rh = None
 
         # Set dummy serial numbers - these will allow the file 
         # to be processed even if the JSON and checklist files 
@@ -89,6 +91,50 @@ class Raw_Profile():
 
         if self.meta is not None:
             scoop_id = self.meta.get("scoop_id")
+
+
+    def apply_thermo_coeffs(self):
+
+        temp_dict = self.thermo_data()
+
+        temp = []
+        rh = []
+
+        temp_raw = []  # List of lists, each containing data from a sensor
+
+        # Fill temp_raw
+        use_resistance = False
+        use_temp = False
+        for key in temp_dict.keys():
+            if "resi" in key:
+                use_resistance = True
+                if use_temp:
+                    use_temp = False
+                    temp_raw = []
+                temp_raw.append(temp_dict[key].magnitude)
+            if "temp" in key and "_" not in key and not use_resistance:
+                use_temp = True
+                temp_raw.append(temp_dict[key].magnitude)
+
+        # Process resistance if needed
+        serial_numbers = temp_dict["serial_numbers"]
+        if use_resistance:
+            for i in range(len(temp_raw)):
+                temp_raw[i] = utils.temp_calib(temp_raw[i],
+                                               serial_numbers["imet" + str(i + 1)])
+
+        rh_raw = []
+        # Fill rh_raw
+        for key in temp_dict.keys():
+            # Ensure only humidity is processed here
+            if "rh" in key and "temp" not in key and "time" not in key:
+                rh_raw.append(temp_dict[key].magnitude)
+        for i in range(len(rh_raw)):
+            rh_raw[i] = utils.rh_calib(rh_raw[i], serial_numbers["rh" + str(i + 1)])
+
+
+        self.calib_temp = temp_raw
+        self.calib_rh = rh_raw
 
     def pos_data(self):
         """ Gets data needed by the Profile constructor.
@@ -393,7 +439,7 @@ class Raw_Profile():
                         pres_list[value].append(np.nan)
 
             # NKF1 -> Rotation
-            elif elem["meta"]["type"] == "NKF1":
+            elif (elem["meta"]["type"] == "NKF1") | (elem["meta"]["type"] == "XKF1"):
 
                 # First time only - setup gps_list
                 if rotation_list is None:
@@ -483,6 +529,7 @@ class Raw_Profile():
         self.rotation = tuple(rotation_list)
 
         if nc_level in 'low':
+            self.apply_thermo_coeffs()
             self._save_netCDF(file_path)
 
     def _read_netCDF(self, file_path):
@@ -675,6 +722,18 @@ class Raw_Profile():
                                       2010-01-01 00:00:00:00")
         new_var.units = "microseconds since 2010-01-01 00:00:00:00"
 
+        if self.calib_temp is not None:
+            for num in temp_sensor_numbers:
+                new_var = temp_grp.createVariable("calib_temp" + str(num), "f8",
+                                                  ("temp_time",))
+                try:
+                    new_var[:] = self.calib_temp[num-1]
+                except Exception:
+                    # This sensor didn't report
+                    continue
+
+                new_var.units = 'K'
+
         # RH
         rh_grp = main_file.createGroup("/rh")
         rh_grp.createDimension("rh_time", None)
@@ -693,6 +752,18 @@ class Raw_Profile():
                                       units="microseconds since \
                                       2010-01-01 00:00:00:00")
         new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+
+        if self.calib_rh is not None:
+            for num in rh_sensor_numbers:
+                new_var = rh_grp.createVariable("calib_rh" + str(num), "f8",
+                                                  ("rh_time",))
+                try:
+                    new_var[:] = self.calib_rh[num-1]
+                except Exception:
+                    # This sensor didn't report
+                    continue
+
+                new_var.units = '%'
 
         # POS
         pos_grp = main_file.createGroup("/pos")
