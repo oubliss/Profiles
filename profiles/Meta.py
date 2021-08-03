@@ -86,15 +86,31 @@ class Meta:
         self.all_fields['location'] = flight.place_name
         self.all_fields['surface_altitude'] = flight.place.altitude
 
-        self.all_fields['checklist_operator'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Observer'][0]
-        self.all_fields['PIC'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Pilot'][0]
-        self.all_fields['GSO'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Payload operator'][0]
+        try:
+            self.all_fields['checklist_operator'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Observer'][0]
+        except IndexError:
+            self.all_fields['checklist_operator'] = 'N/A'
+
+        try:
+            self.all_fields['PIC'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Pilot'][0]
+        except IndexError:
+            self.all_fields['PIC'] = 'N/A'
+
+        try:
+            self.all_fields['GSO'] = [p['full_name'] for p in flight.personnel if p['role'] == 'Payload operator'][0]
+        except IndexError:
+            self.all_fields['GSO'] = 'N/A'
 
         self.all_fields['authorization_type'] = flight.raw_data['legal_rule']
         self.all_fields['platform_id'] = flight.drone.id_number
         self.all_fields['max_achieved_alt'] = flight.raw_data['max_altitude_agl']
 
-        self.all_fields['scoop_id'] = [p for p in flight.drone.notes if 'Scoop' in p][0]
+        # Right now, the Tuffwing doesn't have a scoop id associated with it, so put None if this is the case
+        try:
+            self.all_fields['scoop_id'] = [p for p in flight.drone.notes if 'Scoop' in p][0]
+        except IndexError:
+            self.all_fields['scoop_id'] = None
+
         self.all_fields['platform_name'] = flight.drone.name
 
         self.all_fields['cloud'] = flight.weather['CC']

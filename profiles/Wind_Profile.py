@@ -185,12 +185,12 @@ class Wind_Profile():
 
         for i in range(len(wind_data["roll"])):
             # croll is cos(roll), sroll is sin(roll)...
-            croll = np.cos(wind_data["roll"][i])
-            sroll = np.sin(wind_data["roll"][i])
-            cpitch = np.cos(wind_data["pitch"][i])
-            spitch = np.sin(wind_data["pitch"][i])
-            cyaw = np.cos(wind_data["yaw"][i])
-            syaw = np.sin(wind_data["yaw"][i])
+            croll = np.cos(wind_data["roll"][i]).magnitude
+            sroll = np.sin(wind_data["roll"][i]).magnitude
+            cpitch = np.cos(wind_data["pitch"][i]).magnitude
+            spitch = np.sin(wind_data["pitch"][i]).magnitude
+            cyaw = np.cos(wind_data["yaw"][i]).magnitude
+            syaw = np.sin(wind_data["yaw"][i]).magnitude
 
             Rx = np.matrix([[1, 0, 0],
                             [0, croll, sroll],
