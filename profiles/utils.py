@@ -200,6 +200,93 @@ def regrid_data(data=None, data_times=None, gridded_times=None, units=None):
     return (gridded_data)
 
 
+def regrid_data_group(data=None, data_times=None, gridded_times=None, units=None):
+    """ Returns data interpolated to an evenly spaced array based on
+    gridded_times.
+
+    :param np.Array<Quantity> data: a non-base variable (i.e. not yor chosen \
+       vertical coordinate)
+    :param np.Array<Datetime> data_times: Times coresponding to data
+    :param pint.UnitRegistry units: The unit registry defined in Profile
+    :param np.Array<Datetime> gridded_times: The times returned by regrid_base
+    :rtype: np.Array<Quantity>
+    :return: gridded_data
+    """
+
+    #
+    # Average around selected points
+    #
+    data_index = 0  # This tracks the most recent data element processed
+
+    for i in range(len(gridded_times)-1):
+        #
+        # Find the data indices in the specified time range
+        #
+        start_time = gridded_times[i]
+        end_time = gridded_times[i+1]
+        data_seg_start_ind = None
+        data_seg_end_ind = None
+
+        while data_index < len(data):
+            if data_times[data_index] >= start_time:
+                data_seg_start_ind = data_index
+                break
+            data_index += 1
+
+        while data_index < len(data):
+            if data_times[data_index] >= end_time:
+                data_seg_end_ind = data_index
+                break
+            data_index += 1
+
+        # Calculate and store the segment mean
+        if data_seg_start_ind is not None and data_seg_end_ind is not None:
+            yield {
+                'start_time': start_time,
+                'end_time': end_time,
+                'values': data[data_seg_start_ind:data_seg_end_ind]
+            }
+
+def regrid_data_group_interp(data=None, data_times=None, gridded_times=None, units=None):
+    """ Returns data interpolated to an evenly spaced array based on
+    gridded_times.
+
+    :param np.Array<Quantity> data: a non-base variable (i.e. not yor chosen \
+       vertical coordinate)
+    :param np.Array<Datetime> data_times: Times coresponding to data
+    :param pint.UnitRegistry units: The unit registry defined in Profile
+    :param np.Array<Datetime> gridded_times: The times returned by regrid_base
+    :rtype: np.Array<Quantity>
+    :return: gridded_data
+    """
+
+    #
+    # Average around selected points
+    #
+    data_index = 0  # This tracks the most recent data element processed
+
+    for i in range(len(gridded_times)):
+        #
+        # Find the data indices in the specified time range
+        #
+        val = gridded_times[i]
+        data_seg_start_ind = None
+        data_seg_end_ind = None
+
+        while data_index < len(data):
+            if data_times[data_index] <= val:
+                data_seg_start_ind = data_index
+            else:
+                data_seg_end_ind = data_index
+                break
+            data_index += 1
+
+        # Calculate and store the segment mean
+        if data_seg_start_ind is not None and data_seg_end_ind is not None:
+            yield {
+                'key': val,
+                'values': data[data_seg_start_ind:data_seg_end_ind+1]
+            }
 
 def temp_calib(resistance, sn):
     """ Converts resistance to temperature using the coefficients for the \
