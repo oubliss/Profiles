@@ -119,7 +119,7 @@ class CSV_Coef_Manager(Coef_Manager_Base):
         :return: the tail number
         """
 
-        return self.copternums['tail'][self.copternums['id'] == str(int(copterID))].values[0]
+        return self.copternums['tail'][self.copternums['id'] == int(copterID)].values[0]
 
     def get_sensors(self, scoopID):
         """ Get the sensor serial numbers for the given scoop.
@@ -162,12 +162,15 @@ class CSV_Coef_Manager(Coef_Manager_Base):
             # This means it was a tail number, which can't be cast  to int
             pass
 
-        coefs = self.coefs
-        a = coefs.A[coefs.SerialNumber == str(serial_number)][coefs.SensorType == stype].values[0]
-        b = coefs.B[coefs.SerialNumber == str(serial_number)][coefs.SensorType == stype].values[0]
-        c = coefs.C[coefs.SerialNumber == str(serial_number)][coefs.SensorType == stype].values[0]
-        d = coefs.D[coefs.SerialNumber == str(serial_number)][coefs.SensorType == stype].values[0]
-        eq = coefs.Equation[coefs.SerialNumber == str(serial_number)][coefs.SensorType == stype].values[0]
-        offset = coefs.Offset[coefs.SerialNumber == str(serial_number)][coefs.SensorType == stype].values[0]
+        try:
+            coefs = self.coefs
+            a = coefs.A[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            b = coefs.B[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            c = coefs.C[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            d = coefs.D[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            eq = coefs.Equation[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            offset = coefs.Offset[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+        except IndexError as exc:
+            raise RuntimeError(f'Could not find serial number "{serial_number}" with sensor type "{stype}" in one of the required coefficients (A,B,C,D,Equation,Offset).') from exc
 
         return {"A":a, "B":b, "C":c, "D":d, "Equation":eq, "Offset":offset}

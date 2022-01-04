@@ -1,7 +1,7 @@
 """
 Manages data from a single flight or profile
 """
-
+from metpy.units import units
 import profiles.utils as utils
 import sys
 import os
@@ -9,7 +9,7 @@ from profiles.Raw_Profile import Raw_Profile
 from profiles.Thermo_Profile import Thermo_Profile
 from profiles.Wind_Profile import Wind_Profile
 from copy import deepcopy, copy
-
+import numpy as np
 
 
 class Profile():
@@ -139,6 +139,27 @@ class Profile():
                                     base_start=base_start)
         self._base_start = self.gridded_base[0]
 
+        self.__load_pos__()
+
+
+    def __load_pos__(self):
+        self.lat = []
+        self.lon = []
+        self.alt_MSL = []
+        for item in utils.regrid_data_group(data=list(zip(self._pos['lat'], self._pos['lon'], self._pos['alt_MSL'])), data_times=self._pos['time'], gridded_times=self.gridded_times):
+            self.lat.append(
+                np.nanmean(list(map(lambda latlon: latlon[0].magnitude, item['values'])))
+            )
+            self.lon.append(
+                np.nanmean(list(map(lambda latlon: latlon[1].magnitude, item['values'])))
+            )
+            self.alt_MSL.append(
+                np.nanmean(list(map(lambda latlon: latlon[2].magnitude, item['values'])))
+            )
+        self.lat =  np.array(self.lat) * units.deg
+        self.lon =  np.array(self.lon) * units.deg
+        self.alt_MSL =  np.array(self.alt_MSL) * units.m 
+
     def get(self, varname):
         """
         Returns the requested variable, which may be in Profile or one of its
@@ -147,6 +168,9 @@ class Profile():
         :param str varname: the name of the requested variable
         :return: the requested variable
         """
+
+        if varname in ['lat', 'lon', 'alt_MSL']:
+            return self.__getattribute__(varname)
 
         try:
             return self.__getattribute__(varname)

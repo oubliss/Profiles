@@ -8,9 +8,9 @@ from datetime import datetime as dt
 from metpy.units import units  # this is a pint UnitRegistry
 import profiles.mavlogdump_Profiles as mavlogdump_Profiles
 import profiles.utils as utils
-from profiles.Meta import Meta
-import pandas as pd
 import os
+
+from .utils import event_IDs
 
 units.define('percent = 0.01*count = %')
 units.define('gPerKg = 0.001*count = g/Kg')
@@ -82,7 +82,7 @@ class Raw_Profile():
                 self._read_netCDF(file_path[:-5] + ".nc")
             else:
                 self._read_JSON(file_path, nc_level=nc_level)
-        elif ".nc" in file_path or ".NC" in file_path:
+        elif ".nc" in file_path or ".NC" in file_path or ".cdf" in file_path:
             self._read_netCDF(file_path)
         elif ".bin" in file_path or ".BIN" in file_path:
             self.file_path = mavlogdump_Profiles.with_args(fmt="json",
@@ -258,6 +258,7 @@ class Raw_Profile():
         pos_list = None
         pres_list = None
         rotation_list = None
+        event_list = None
         # sensor_names will be dictionary of dictionaries formatted
         # {
         #     "valid_from": ,
@@ -285,6 +286,16 @@ class Raw_Profile():
                 self.baro = "BAR2"
                 pres_list = None
                 sensor_names["BARO"] = None
+
+            if elem["meta"]["type"] == "EV":
+
+                # Create list. The first slot will be the event ID, the second, the timestamp
+                if event_list is None:
+                    event_list =[[], []]
+
+                event_list[0].append(elem["data"]["Id"])
+                event_list[1].append(dt.utcfromtimestamp(elem["meta"]["timestamp"]))
+
 
             # IMET -> Temperature
             if elem["meta"]["type"] == "IMET":
@@ -527,6 +538,7 @@ class Raw_Profile():
         self.pos = tuple(pos_list)
         self.pres = tuple(pres_list)
         self.rotation = tuple(rotation_list)
+        self.events = tuple(event_list)
 
         if nc_level in 'low':
             self.apply_thermo_coeffs()
@@ -677,6 +689,20 @@ class Raw_Profile():
         self.dev = "True" in main_file.dev  # if main_file.dev contains the
         # string "True", then this is a developmental flight.
 
+        #
+        # Get the Events
+        #
+
+        event_list = []
+
+        event_list.append(main_file['events']['events'][:])
+        event_list.append(netCDF4.num2date(main_file["events"].
+                                         variables["time"][:],
+                                         units="microseconds since \
+                                         2010-01-01 00:00:00:00"))
+
+        self.events = event_list
+
         main_file.close()
 
     def _save_netCDF(self, file_path):
@@ -701,6 +727,20 @@ class Raw_Profile():
         for i in range(4):  # Throughout the file, it is assumed that there are 4 sensors of each type
             sn_grp.setncattr("rh" + str(i+1), self.serial_numbers['rh' + str(i+1)])
             sn_grp.setncattr("imet" + str(i+1), self.serial_numbers['imet' + str(i+1)])
+
+        # EVENTS
+        events_grp = main_file.createGroup("/events")
+        events_grp.createDimension("event_time", None)
+        new_var = events_grp.createVariable("time", "f8", ("event_time",))
+        new_var[:] = netCDF4.date2num(self.events[-1],
+                                      units="microseconds since \
+                                      2010-01-01 00:00:00:00")
+        new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+
+        new_var = events_grp.createVariable("events", "f8", ("event_time",))
+        new_var[:] = self.events[0]
+        new_var.comment1 = "Event IDs last updated Aug 2021"
+        new_var.units = event_IDs
 
         # TEMP
         temp_grp = main_file.createGroup("/temp")
