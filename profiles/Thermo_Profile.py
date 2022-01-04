@@ -235,8 +235,8 @@ class Thermo_Profile():
 
         # Calculate mixing ratio
         self.mixing_ratio = calc.mixing_ratio_from_relative_humidity(
-                            np.divide(self.rh.magnitude, 100), self.temp,
-                            self.pres)
+                            self.pres, self.temp,
+                            np.divide(self.rh.magnitude, 100))
 
         self.theta = calc.potential_temperature(self.pres, self.temp)
         self.T_d = calc.dewpoint_from_relative_humidity(self.temp, self.rh)
