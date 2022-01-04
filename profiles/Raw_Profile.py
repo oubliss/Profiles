@@ -33,7 +33,7 @@ class Raw_Profile():
     :var Meta meta: processes metadata
     """
 
-    def __init__(self, file_path, dev=False, scoop_id=None, nc_level='low', metadata=None):
+    def __init__(self, file_path, dev=False, nc_level='low', metadata=None):
         """ Creates a Raw_Profile object and reads in data in the appropriate
         format. *If meta_path_flight or meta_path_header includes scoop_id,
         the scoop_id constructor parameter will be overwritten*

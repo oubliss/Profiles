@@ -70,7 +70,7 @@ class Profile_Set():
         self._root_dir = ""
         self._base_start = None
 
-    def add_all_profiles(self, file_path, scoop_id=None, metadata=None):
+    def add_all_profiles(self, file_path, metadata=None):
         """ Reads a file, splits it in to several vertical profiles, and adds
         all Profiles to profiles
 
@@ -97,7 +97,7 @@ class Profile_Set():
             self._root_dir = self._root_dir[:self._root_dir.rindex("/")+1]
 
         # Process altitude data for profile identification
-        raw_profile_set = Raw_Profile(file_path, self.dev, scoop_id,
+        raw_profile_set = Raw_Profile(file_path, self.dev,
                                       nc_level=self._nc_level,
                                       metadata=metadata)
 

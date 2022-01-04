@@ -14,9 +14,8 @@ setuptools.setup(
     url="https://github.com/oucass/Profiles",
     packages=setuptools.find_packages(),
     install_requires = [
-        'metpy==0.12.2',
+        'metpy>=1.1.0',
         'pymavlink',
-        'azure-data-tables',
         'netCDF4',
         'matplotlib',
         'pandas',

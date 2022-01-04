@@ -3,8 +3,7 @@ import contextlib
 import pandas as pd
 from profiles.conf import coef_info
 from abc import abstractmethod
-# from azure.data.tables import TableServiceClient
-# from azure.core.exceptions import ResourceNotFoundError
+
 
 class Coef_Manager_Base:
     @abstractmethod
@@ -103,89 +102,6 @@ class Coef_Manager(Coef_Manager_Base):
         :return: information about the sensor, including offset OR coefs and calibration equation
         """
         return self.sub_manager.get_coefs(type, str(serial_number))
-
-
-# class Azure_Coef_Manager:
-#     """ interface with Azure
-#     """
-#
-#     def __init__(self, table_service):
-#         """ Create Azure_Coef_Manager
-#
-#         :param azure.cosmosdb.table.tableservice.TableService table_service: TableService connected \
-#            to storage account containing coef tables
-#         """
-#         self.table_service = table_service
-#
-#     def get_tail_n(self, copterID):
-#         """ Get the tail number corresponding to a short ID number.
-#
-#         :param int copterID: the short ID number of the copter
-#         :rtype: str
-#         :return: the tail number
-#         """
-#         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-#             return self.table_service.get_table_client('Copters').get_entity('default', str(int(copterID))).name
-#
-#     def get_sensors(self, scoopID):
-#         """ Get the sensor serial numbers for the given scoop.
-#
-#         :param str scoopID: The scoop's identifier
-#         :rtype: dict
-#         :return: sensor numbers as {"imet1":"", "imet2":"", "imet3":"", "imet4":"",\
-#                                     "rh1":"", "rh2":"", "rh3":"", "rh4":""}
-#         """
-#         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-#             all_scoop = \
-#                 self.table_service.get_table_client('Scoops').query_entities(
-#                 filter="RowKey ge '" + str(scoopID).rjust(7, '0') + "_00000000'",
-#                 select="RowKey")
-#             max_key = str(scoopID).rjust(7, '0') + "_00000000"
-#             for entity in all_scoop:
-#                 if entity.RowKey > max_key:
-#                     max_key = entity.RowKey
-#             coefs = self.table_service.get_table_client('Scoops').get_entity("default", max_key)
-#
-#             # TODO test that max
-#             sns = self.table_service.get_table_client('Scoops').get_entity(str(scoopID), str(max_date))
-#             return {"imet1":sns.IMET1, "imet2":sns.IMET2, "imet3":sns.IMET3, "imet4":sns.IMET4,
-#                     "rh1":sns.RH1, "rh2":sns.RH2, "rh3":sns.RH3, "rh4":sns.RH4}
-#
-#     def get_coefs(self, type, serial_number):
-#         """ Get the coefs for the sensor with the given type and serial number.
-#
-#         :param str type: "Imet" or "RH" or "Wind"
-#         :param str serial_number: the sensor's serial number
-#         :rtype: dict
-#         :return: information about the sensor, including offset OR coefs and calibration equation
-#         """
-#         try:
-#             with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-#                 possible_coefs = \
-#                     self.table_service.get_table_client('MasterCoef').query_entities(
-#                     filter="RowKey ge '" + str(serial_number).rjust(5, '0') + "-00000000' and " +
-#                         "RowKey lt '" + str(int(serial_number)+1).rjust(5, '0') + "-00000000'",
-#                     select="RowKey")
-#                 max_key = str(serial_number).rjust(5, '0') + "-00000000"
-#                 for entity in possible_coefs:
-#                     if entity.RowKey > max_key:
-#                         max_key = entity.RowKey
-#                 coefs = self.table_service.get_table_client('MasterCoef').get_entity("default", max_key)
-#         except ResourceNotFoundError:
-#             print('No coefficients found for ' + type + " sensor " + str(serial_number)
-#                   + " - using default coefs.")
-#             coefs = self.table_service.get_table_client('MasterCoef').get_entity("default", "00000-00000000")
-#
-#         try:
-#             return {"A":coefs.A, "B":coefs.B, "C":coefs.C, "D":coefs.D, "Equation":coefs.Equation}
-#         except AttributeError:
-#             try:
-#                 return {"A":coefs.A, "B":coefs.B, "C":coefs.C, "Equation":coefs.Equation}
-#             except AttributeError:
-#                 try:
-#                     return {"A":coefs.A, "B":coefs.B, "Equation":coefs.Equation}
-#                 except AttributeError:
-#                     return {"A":coefs.A, "Equation":coefs.Equation}
 
 
 class CSV_Coef_Manager(Coef_Manager_Base):
