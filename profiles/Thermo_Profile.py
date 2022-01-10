@@ -1,6 +1,7 @@
 """
 Calculates and stores basic thermodynamic parameters
 """
+import datetime
 from metpy import calc
 import profiles.utils as utils
 import numpy as np
@@ -301,6 +302,20 @@ class Thermo_Profile():
                                        units='microseconds since \
                                        2010-01-01 00:00:00:00')
         time_var.units = 'microseconds since 2010-01-01 00:00:00:00'
+
+        # Do base_time and time_offset like ARM
+        bt = abs((self.gridded_times[0] - datetime.datetime(1970, 1, 1)).total_seconds())
+        bt_var = main_file.createVariable('base_time', 'i8')
+        bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
+        bt_var[:] = bt
+
+        to = netCDF4.date2num(self.gridded_times,
+                              units='seconds since 1970-01-01 00:00:00 UTC') - bt
+        to_var = main_file.createVariable('time_offset', 'i8', dimensions=('time',))
+        to_var.setncattr('long_name', 'Time offset')
+        to_var.setncattr('units', 'seconds since base_time')
+        to_var[:] = to
+
         # PRES
         pres_var = main_file.createVariable("pres", "f8", ("time",))
         pres_var[:] = self.pres.magnitude
