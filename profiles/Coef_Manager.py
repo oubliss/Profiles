@@ -108,7 +108,7 @@ class CSV_Coef_Manager(Coef_Manager_Base):
 
     def __init__(self, file_path):
         self.file_path = file_path
-        self.coefs = pd.read_csv(os.path.join(file_path, 'MasterCoefList.csv'))
+        self.coefs = pd.read_csv(os.path.join(file_path, 'MasterCoefList.csv'), dtype=str)
         self.copternums = pd.read_csv(os.path.join(file_path, 'copterID.csv'), names=['id', 'tail'])
 
     def get_tail_n(self, copterID):
@@ -164,12 +164,19 @@ class CSV_Coef_Manager(Coef_Manager_Base):
 
         try:
             coefs = self.coefs
-            a = coefs.A[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            b = coefs.B[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            c = coefs.C[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            d = coefs.D[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            eq = coefs.Equation[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            offset = coefs.Offset[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            # a = coefs.A[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            # b = coefs.B[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            # c = coefs.C[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            # d = coefs.D[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            # eq = coefs.Equation[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+            # offset = coefs.Offset[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+
+            a = coefs.A[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
+            b = coefs.B[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
+            c = coefs.C[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
+            d = coefs.D[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
+            eq = coefs.Equation[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
+            offset = coefs.Offset[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
         except IndexError as exc:
             raise RuntimeError(f'Could not find serial number "{serial_number}" with sensor type "{stype}" in one of the required coefficients (A,B,C,D,Equation,Offset).') from exc
 
