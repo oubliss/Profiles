@@ -1,6 +1,7 @@
 """
 Calculates and stores basic thermodynamic parameters
 """
+import datetime
 from metpy import calc
 import profiles.utils as utils
 import numpy as np
@@ -235,8 +236,8 @@ class Thermo_Profile():
 
         # Calculate mixing ratio
         self.mixing_ratio = calc.mixing_ratio_from_relative_humidity(
-                            np.divide(self.rh.magnitude, 100), self.temp,
-                            self.pres)
+                            self.pres, self.temp,
+                            np.divide(self.rh.magnitude, 100))
 
         self.theta = calc.potential_temperature(self.pres, self.temp)
         self.T_d = calc.dewpoint_from_relative_humidity(self.temp, self.rh)
@@ -301,6 +302,23 @@ class Thermo_Profile():
                                        units='microseconds since \
                                        2010-01-01 00:00:00:00')
         time_var.units = 'microseconds since 2010-01-01 00:00:00:00'
+
+        # Do base_time and time_offset like ARM
+        bt = abs((self.gridded_times[0] - dt.datetime(1970, 1, 1)).total_seconds())
+        bt_var = main_file.createVariable('base_time', 'i8')
+        bt_var.setncattr('long_name', 'Base time in Epoch')
+        bt_var.setncattr('ancillary_variables', 'time_offset')
+        bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
+        bt_var[:] = bt
+
+        to = netCDF4.date2num(self.gridded_times,
+                              units=f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
+        to_var.setncattr('long_name', 'Time offset from base_time')
+        to_var.setncattr('units', f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to_var.setncattr('ancillary_variables', 'base_time')
+        to_var[:] = to
+
         # PRES
         pres_var = main_file.createVariable("pres", "f8", ("time",))
         pres_var[:] = self.pres.magnitude

@@ -64,14 +64,13 @@ class Profile_Set():
         self.dev = dev
         self.confirm_bounds = confirm_bounds
         self.profiles = []
-        self.profile_start_height = profile_start_height
+        self.profile_start_height = profile_start_height * units.m
         #self.meta = None
         self._nc_level = nc_level
         self._root_dir = ""
         self._base_start = None
 
-    def add_all_profiles(self, file_path, scoop_id=None,
-                         meta_flight_path=None, meta_header_path=None):
+    def add_all_profiles(self, file_path, metadata=None):
         """ Reads a file, splits it in to several vertical profiles, and adds
         all Profiles to profiles
 
@@ -98,10 +97,10 @@ class Profile_Set():
             self._root_dir = self._root_dir[:self._root_dir.rindex("/")+1]
 
         # Process altitude data for profile identification
-        raw_profile_set = Raw_Profile(file_path, self.dev, scoop_id,
+        raw_profile_set = Raw_Profile(file_path, self.dev,
                                       nc_level=self._nc_level,
-                                      meta_header_path=meta_header_path,
-                                      meta_flight_path=meta_flight_path)
+                                      metadata=metadata)
+
         pos = raw_profile_set.pos_data()
 
         # Identify the start, peak, and end indices of each profile

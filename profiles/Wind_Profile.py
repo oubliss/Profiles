@@ -185,12 +185,12 @@ class Wind_Profile():
 
         for i in range(len(wind_data["roll"])):
             # croll is cos(roll), sroll is sin(roll)...
-            croll = np.cos(wind_data["roll"][i])
-            sroll = np.sin(wind_data["roll"][i])
-            cpitch = np.cos(wind_data["pitch"][i])
-            spitch = np.sin(wind_data["pitch"][i])
-            cyaw = np.cos(wind_data["yaw"][i])
-            syaw = np.sin(wind_data["yaw"][i])
+            croll = np.cos(wind_data["roll"][i]).magnitude
+            sroll = np.sin(wind_data["roll"][i]).magnitude
+            cpitch = np.cos(wind_data["pitch"][i]).magnitude
+            spitch = np.sin(wind_data["pitch"][i]).magnitude
+            cyaw = np.cos(wind_data["yaw"][i]).magnitude
+            syaw = np.sin(wind_data["yaw"][i]).magnitude
 
             Rx = np.matrix([[1, 0, 0],
                             [0, croll, sroll],
@@ -274,6 +274,22 @@ class Wind_Profile():
                                        units='microseconds since \
                                        2010-01-01 00:00:00:00')
         time_var.units = 'microseconds since 2010-01-01 00:00:00:00'
+
+        # Do base_time and time_offset like ARM
+        bt = abs((self.gridded_times[0] - dt.datetime(1970, 1, 1)).total_seconds())
+        bt_var = main_file.createVariable('base_time', 'i8')
+        bt_var.setncattr('long_name', 'Base time in Epoch')
+        bt_var.setncattr('ancillary_variables', 'time_offset')
+        bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
+        bt_var[:] = bt
+
+        to = netCDF4.date2num(self.gridded_times,
+                              units=f'seconds since {bt:%Y-%m-%d %H:%M:%S UTC}')
+        to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
+        to_var.setncattr('long_name', 'Time offset from base_time')
+        to_var.setncattr('units', f'seconds since {bt:%Y-%m-%d %H:%M:%S UTC}')
+        to_var.setncattr('ancillary_variables', 'base_time')
+        to_var[:] = to
 
         main_file.close()
 

@@ -141,14 +141,14 @@ def process(args):
     if istlog and args.format == 'csv':  # we know our fields from the get-go
         try:
             currentOffset = 1  # Store num fields for each message.
-            for t in types:
+            for itype in types:
                 try:
-                    typeClass = "MAVLink_{0}_message".format(t.lower())
-                    fields += [t + '.' + x for x in
+                    typeClass = "MAVLink_{0}_message".format(itype.lower())
+                    fields += [itype + '.' + x for x in
                                inspect.getargspec(
                                        getattr(mavutil.mavlink, typeClass)
                                        .__init__).args[1:]]
-                    offsets[t] = currentOffset
+                    offsets[itype] = currentOffset
                     currentOffset += len(fields)
                 except IndexError:
                     quit()
@@ -279,6 +279,7 @@ def process(args):
 
             # convert any array.array (e.g. packed-16-bit fft readings) into lists:
             for key in data.keys():
+                # print(type(data[key]))
                 if type(data[key]) == array.array:
                     data[key] = list(data[key])
 

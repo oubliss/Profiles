@@ -1,0 +1,4 @@
+*.pyc
+test/data/*.json
+test/data/*.cdf
+test/data/*.nc
