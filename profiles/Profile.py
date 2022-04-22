@@ -208,6 +208,7 @@ class Profile():
                              gridded_base=self.gridded_base,
                              indices=self.indices, ascent=self.ascent,
                              units=self._units, file_path=self.file_path,
+                             pos=self._pos,
                              meta=self.meta,
                              nc_level=self._nc_level)
             if len(self._wind_profile.gridded_times) > len(self.gridded_times):
@@ -238,6 +239,7 @@ class Profile():
                                gridded_base=self.gridded_base,
                                indices=self.indices, ascent=self.ascent,
                                units=self._units, file_path=self.file_path,
+                               pos=self._pos,
                                meta=self.meta,
                                nc_level=self._nc_level)
             if len(self._thermo_profile.gridded_times) > \

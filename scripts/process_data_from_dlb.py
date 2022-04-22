@@ -5,11 +5,16 @@ from datetime import datetime
 import dronelogbook as dlb
 import profiles
 from profiles import Meta
-from profiles import Profile, Profile_Set
+from profiles import Profile, Profile_Set, plotting
+from my_lib.utils import elevation
 
-download_dir = '/Users/tyler.bell/Data/uas'
-start = datetime(2020, 8, 27, 0, 0)
-end = datetime(2020, 8, 27, 12)
+download_dir = '/Users/tyler.bell/Data/uas/perils/IOP4'
+if not os.path.exists(download_dir):
+    os.makedirs(download_dir)
+
+start = datetime(2022, 4, 13)
+end = datetime(2022, 4, 13, 23)
+
 
 # Connect to DLB
 conn = dlb.DLB()
@@ -31,21 +36,48 @@ for f in flights[ind]:
         print("Downloading " + filename)
         conn.get_binary(f.guid, filename)
 
+# Get all the unique locations as well
+flight_locations = list(set([(f.place_name, f.place_guid) for f in flights[ind]]))
 
-a = Profile_Set.Profile_Set(resolution=5, res_units='m', ascent=True, dev=True, confirm_bounds=False,
-                            nc_level="low", profile_start_height=349)
+for place, place_guid in flight_locations:
+    # if place != "Lake Village":
+    #     continue
 
-# Process the files
-for f, fn in zip(flights[ind], bin_files):
-    metadata = Meta.Meta(guid=f.guid)
-    a.add_all_profiles(fn, metadata=metadata)
+    alt = conn.get_place(place_guid).get_usgs_alt()  # Get the ground elevation from the USGS
+    print(f"Processing files from {place} starting at altitude: {round(alt+10)}")
+    a = Profile_Set.Profile_Set(resolution=5, res_units='m', ascent=True, dev=True, confirm_bounds=False,
+                                nc_level="low", profile_start_height=round(alt+10))
 
-at = []
-for p in a.profiles:
-    at.append(p.get_thermo_profile())
+    # Process the files
+    for f, fn in zip(flights[ind], bin_files):
+        if f.place_name != place:
+            continue
+        # print(fn)
 
-aw = []
-for p in a.profiles:
-    aw.append(p.get_wind_profile())
+        if not os.path.exists(fn):
+            continue
+        metadata = Meta.Meta(guid=f.guid)
+
+        try:
+            a.add_all_profiles(fn, metadata=metadata)
+        except Exception as e:
+            import traceback
+            print("Error on " + fn)
+            print(traceback.print_exc())
+
+    at = []
+    for p in a.profiles:
+        if len(p.gridded_times) > 3:
+            at.append(p.get_thermo_profile())
+
+    aw = []
+    for p in a.profiles:
+        try:
+            aw.append(p.get_wind_profile())
+        except Exception:
+            import traceback
+            print("Error on " + fn)
+            print(traceback.print_exc())
+
 
 
