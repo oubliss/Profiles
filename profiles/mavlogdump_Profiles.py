@@ -308,7 +308,7 @@ def process(args):
         # CSV format outputs columnar data with a user-specified delimiter
         elif args.format == 'csv':
             data = m.to_dict()
-            dtype = m.get_type()
+            mtype = m.get_type()
 
             # If this message has a duplicate timestamp, copy its data into the
             # existing data list. Also
@@ -319,7 +319,7 @@ def process(args):
                                for y in fields]
                 else:
                     newData = [str(data[y.split('.')[-1]]) if
-                               y.split('.')[0] == dtype and y.split('.')[-1]
+                               y.split('.')[0] == mtype and y.split('.')[-1]
                                in data else "" for y in fields]
 
                 for i, val in enumerate(newData):
@@ -336,7 +336,7 @@ def process(args):
                                else "" for y in fields]
                 else:
                     csv_out = [str(data[y.split('.')[-1]]) if
-                               y.split('.')[0] == dtype and y.split('.')[-1]
+                               y.split('.')[0] == mtype and y.split('.')[-1]
                                in data else "" for y in fields]
         # Otherwise we output in a standard Python dict-style format
         else:
