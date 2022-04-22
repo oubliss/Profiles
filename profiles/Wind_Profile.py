@@ -32,7 +32,7 @@ class Wind_Profile():
 
     def _init2(self, wind_dict, resolution, file_path=None,
                gridded_times=None, gridded_base=None, indices=(None, None),
-               ascent=True, units=None, nc_level='low', meta=None):
+               ascent=True, units=None, pos=None, nc_level='low', meta=None):
         """ Creates Wind_Profile object based on rotation data at the specified
         resolution
 
@@ -136,6 +136,21 @@ class Wind_Profile():
                                        units=self._units)
         self.u, self.v = metpy.calc.wind_components(self.speed, self.dir)
 
+        if pos is not None:
+            # grid lat
+            self.lat = utils.regrid_data(data=pos['lat'], data_times=pos['time'],
+                                         gridded_times=self.gridded_times,
+                                         units=self._units)
+
+            self.lon = utils.regrid_data(data=pos['lon'], data_times=pos['time'],
+                                         gridded_times=self.gridded_times,
+                                         units=self._units)
+
+        else:
+            self.lat = np.full_like(self.gridded_times, -999.)
+            self.lon = np.full_like(self.gridded_times, -999.)
+
+
         minlen = min([len(self.u), len(self.v), len(self.dir),
                       len(self.speed), len(self.alt), len(self.pres),
                       len(self.gridded_times)])
@@ -229,7 +244,7 @@ class Wind_Profile():
         :param string file_path: file name
         """
 
-        file_name = str(self._meta.get("location")) + str(self.resolution.magnitude) + \
+        file_name = str(self._meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
                     str(self._meta.get("platform_id")) + "CMT" + \
                     "wind_" + self._ascent_filename_tag + ".c1." + \
                     self._meta.get("timestamp").replace("_", ".") + ".cdf"
@@ -267,6 +282,14 @@ class Wind_Profile():
         pres_var = main_file.createVariable("pres", "f8", ("time",))
         pres_var[:] = self.pres.magnitude
         pres_var.units = str(self.pres.units)
+        # LAT
+        lat_var = main_file.createVariable("lat", "f8", ("time",))
+        lat_var[:] = self.lat.magnitude
+        lat_var[:] = str(self.lat.units)
+        # LON
+        lon_var = main_file.createVariable("lon", "f8", ("time",))
+        lon_var[:] = self.lon.magnitude
+        lon_var[:] = str(self.lon.units)
 
         # TIME
         time_var = main_file.createVariable("time", "f8", ("time",))
@@ -284,10 +307,10 @@ class Wind_Profile():
         bt_var[:] = bt
 
         to = netCDF4.date2num(self.gridded_times,
-                              units=f'seconds since {bt:%Y-%m-%d %H:%M:%S UTC}')
+                              units=f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
         to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
         to_var.setncattr('long_name', 'Time offset from base_time')
-        to_var.setncattr('units', f'seconds since {bt:%Y-%m-%d %H:%M:%S UTC}')
+        to_var.setncattr('units', f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
         to_var.setncattr('ancillary_variables', 'base_time')
         to_var[:] = to
 

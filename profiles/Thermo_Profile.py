@@ -33,7 +33,7 @@ class Thermo_Profile():
 
     def _init2(self, temp_dict, resolution, file_path=None,
                gridded_times=None, gridded_base=None, indices=(None, None),
-               ascent=True, units=None, meta=None, nc_level='low'):
+               ascent=True, units=None, pos=None, meta=None, nc_level='low'):
         """ Creates Thermo_Profile object from raw data at the specified
         resolution.
 
@@ -226,6 +226,20 @@ class Thermo_Profile():
                                       gridded_times=self.gridded_times,
                                       units=self._units)
 
+        if pos is not None:
+            # grid lat
+            self.lat = utils.regrid_data(data=pos['lat'], data_times=pos['time'],
+                                         gridded_times=self.gridded_times,
+                                         units=self._units)
+
+            self.lon = utils.regrid_data(data=pos['lon'], data_times=pos['time'],
+                                         gridded_times=self.gridded_times,
+                                         units=self._units)
+
+        else:
+            self.lat = np.full_like(self.gridded_times, -999.) * self._units('degrees')
+            self.lon = np.full_like(self.gridded_times, -999.) * self._units('degrees')
+
         minlen = min(len(self.alt), len(self.gridded_times), len(self.rh),
                      len(self.pres), len(self.temp))
         self.pres = self.pres[0:minlen]
@@ -270,7 +284,7 @@ class Thermo_Profile():
 
         :param string file_path: file name
         """
-        file_name = str(self._meta.get("location")) + str(self.resolution.magnitude) + \
+        file_name = str(self._meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
                     str(self._meta.get("platform_id")) + "CMT" + \
                     "thermo_" + self._ascent_filename_tag + ".c1." + \
                     self._meta.get("timestamp").replace("_", ".") + ".cdf"
@@ -351,6 +365,14 @@ class Thermo_Profile():
         q_var = main_file.createVariable("q", "f8", ("time",))
         q_var[:] = self.q.magnitude
         q_var.units = str(self.q.units)
+        # LAT
+        lat_var = main_file.createVariable("lat", "f8", ("time",))
+        lat_var[:] = self.lat.magnitude
+        lat_var = str(self.lat.units)
+        # LON
+        lon_var = main_file.createVariable("lon", "f8", ("time",))
+        lon_var[:] = self.lon.magnitude
+        lon_var = str(self.lon.units)
 
         main_file.close()
 

@@ -109,7 +109,7 @@ class CSV_Coef_Manager(Coef_Manager_Base):
     def __init__(self, file_path):
         self.file_path = file_path
         self.coefs = pd.read_csv(os.path.join(file_path, 'MasterCoefList.csv'), dtype=str)
-        self.copternums = pd.read_csv(os.path.join(file_path, 'copterID.csv'), names=['id', 'tail'])
+        self.copternums = pd.read_csv(os.path.join(file_path, 'copterID.csv'), names=['id', 'tail'], dtype=str)
 
     def get_tail_n(self, copterID):
         """ Get the tail number corresponding to a short ID number.
@@ -119,7 +119,7 @@ class CSV_Coef_Manager(Coef_Manager_Base):
         :return: the tail number
         """
 
-        return self.copternums['tail'][self.copternums['id'] == int(copterID)].values[0]
+        return self.copternums['tail'][self.copternums['id'] == str(int(copterID))].values[0]
 
     def get_sensors(self, scoopID):
         """ Get the sensor serial numbers for the given scoop.
