@@ -15,6 +15,7 @@ if not os.path.exists(download_dir):
 start = datetime(2022, 4, 13)
 end = datetime(2022, 4, 13, 23)
 
+
 # Connect to DLB
 conn = dlb.DLB()
 
@@ -28,7 +29,6 @@ ind = np.where((flight_times >= start) & (flight_times <= end))
 # Download the data locally
 bin_files = []
 for f in flights[ind]:
-    print(f)
     filename = f"{download_dir}/flight{f.raw_data['flight_number']}_{f.flight_time:%Y%m%d_%H%M%S}.BIN"
     bin_files.append(filename)
 
@@ -78,5 +78,6 @@ for place, place_guid in flight_locations:
             import traceback
             print("Error on " + fn)
             print(traceback.print_exc())
+
 
 

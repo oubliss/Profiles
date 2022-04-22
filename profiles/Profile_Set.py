@@ -64,10 +64,12 @@ class Profile_Set():
         self.dev = dev
         self.confirm_bounds = confirm_bounds
         self.profiles = []
+
         if profile_start_height is not None:
             self.profile_start_height = profile_start_height * units.m
         else:
             self.profile_start_height = None
+
         #self.meta = None
         self._nc_level = nc_level
         self._root_dir = ""
