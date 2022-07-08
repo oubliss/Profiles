@@ -1,6 +1,8 @@
 [submodule "dronelogbook"]
 	path = dronelogbook
-	url = git@github.com:oucass/oucass-DroneLogbook.git
+	url = git@github.com:oucass/BLISS-DroneLogbook.git
+	branch = main
 [submodule "SensorCoefficients"]
 	path = SensorCoefficients
-	url = https://github.com/oucass/SensorCoefficients
+	url = git@github.com:oucass/SensorCoefficients
+	branch = main
