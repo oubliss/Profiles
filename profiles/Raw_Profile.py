@@ -259,6 +259,7 @@ class Raw_Profile():
         pres_list = None
         rotation_list = None
         event_list = None
+        message_list = None
         # sensor_names will be dictionary of dictionaries formatted
         # {
         #     "valid_from": ,
@@ -296,6 +297,13 @@ class Raw_Profile():
                 event_list[0].append(elem["data"]["Id"])
                 event_list[1].append(dt.utcfromtimestamp(elem["meta"]["timestamp"]))
 
+            if elem["meta"]["type"] == "MSG":
+
+                if message_list is None:
+                    message_list = [[], []]
+
+                message_list[0].append(elem["data"]["Message"])
+                message_list[1].append(dt.utcfromtimestamp(elem["meta"]["timestamp"]))
 
             # IMET -> Temperature
             if elem["meta"]["type"] == "IMET":
@@ -539,6 +547,7 @@ class Raw_Profile():
         self.pres = tuple(pres_list)
         self.rotation = tuple(rotation_list)
         self.events = tuple(event_list)
+        self.messages = tuple(message_list)
 
         if nc_level == 'low':
             self.apply_thermo_coeffs()
@@ -703,6 +712,20 @@ class Raw_Profile():
 
         self.events = event_list
 
+        #
+        # Get the Messages
+        #
+
+        messages_list = []
+
+        messages_list.append(main_file['messages']['messages'][:])
+        messages_list.append(netCDF4.num2date(main_file["messages"].
+                                           variables["time"][:],
+                                           units="microseconds since \
+                                                 2010-01-01 00:00:00:00"))
+
+        self.messages = messages_list
+
         main_file.close()
 
     def _save_netCDF(self, file_path):
@@ -751,6 +774,19 @@ class Raw_Profile():
         new_var[:] = self.events[0]
         new_var.comment1 = "Event IDs last updated Aug 2021"
         new_var.units = event_IDs
+
+        # MESSAGES
+        message_grp = main_file.createGroup("/messages")
+        message_grp.createDimension("message_time", None)
+        new_var = message_grp.createVariable("time", "f8", ("message_time",))
+        new_var[:] = netCDF4.date2num(self.messages[-1],
+                                      units="microseconds since \
+                                              2010-01-01 00:00:00:00")
+        new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+
+        new_var = message_grp.createVariable("messages", '<U13', ("message_time",))
+        new_var[:] = np.array(self.messages[0])
+        new_var.units = 'string'
 
         # TEMP
         temp_grp = main_file.createGroup("/temp")
