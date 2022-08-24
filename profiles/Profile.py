@@ -73,17 +73,18 @@ class Profile():
         :param profiles.Meta metadata: Meta object with metadata included
         """
 
+
+        self._nc_level = nc_level
+
         # self.jms_path = coefs_path
         if raw_profile is not None:
             self._raw_profile = raw_profile
         else:
             self._raw_profile = Raw_Profile(file_path, dev, scoop_id,
-                                            nc_level=nc_level,
                                             metadata=metadata)
         self._units = self._raw_profile.get_units()
         self._pos = self._raw_profile.pos_data()
         self._pres = (self._raw_profile.pres[0], self._raw_profile.pres[-1])
-        self._nc_level = nc_level
         self.meta = self._raw_profile.meta
         file_path = self._raw_profile.file_path
 
@@ -92,7 +93,7 @@ class Profile():
         try:
             if index_list is None:
                 index_list = \
-                 utils.identify_profile(self._pos["alt_MSL"].magnitude,
+                 utils.identify_profile(self._pos["alt_MSL"],
                                         self._pos["time"], confirm_bounds,
                                         profile_start_height=\
                                         profile_start_height)
@@ -193,13 +194,17 @@ class Profile():
                   "get_thermo_profile and get_wind_profile before trying "
                   "again.")
 
-    def get_wind_profile(self):
+    def get_wind_profile(self, file_path=None):
         """ If a Wind_Profile object does not already exist, it is created when
         this method is called.
 
         :return: the Wind_Profile object
         :rtype: Wind_Profile
         """
+
+        if file_path is None:
+            file_path = self.file_path
+
         if self._wind_profile is None:
             wind_data = self._raw_profile.wind_data()
             self._wind_profile = \
@@ -207,7 +212,7 @@ class Profile():
                              gridded_times=self.gridded_times,
                              gridded_base=self.gridded_base,
                              indices=self.indices, ascent=self.ascent,
-                             units=self._units, file_path=self.file_path,
+                             units=self._units, file_path=file_path,
                              pos=self._pos,
                              meta=self.meta,
                              nc_level=self._nc_level)
@@ -224,13 +229,16 @@ class Profile():
                 self._thermo_profile.truncate_to(new_len)
         return self._wind_profile
 
-    def get_thermo_profile(self):
+    def get_thermo_profile(self, file_path=None):
         """ If a Thermo_Profile object does not already exist, it is created
         when this method is called.
 
         :return: the Thermo_Profile object
         :rtype: Thermo_Profile
         """
+        if file_path is None:
+            file_path = self.file_path
+
         if self._thermo_profile is None:
             thermo_data = self._raw_profile.thermo_data()
             self._thermo_profile = \
@@ -238,7 +246,7 @@ class Profile():
                                gridded_times=self.gridded_times,
                                gridded_base=self.gridded_base,
                                indices=self.indices, ascent=self.ascent,
-                               units=self._units, file_path=self.file_path,
+                               units=self._units, file_path=file_path,
                                pos=self._pos,
                                meta=self.meta,
                                nc_level=self._nc_level)

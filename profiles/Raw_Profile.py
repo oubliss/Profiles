@@ -540,7 +540,7 @@ class Raw_Profile():
         self.rotation = tuple(rotation_list)
         self.events = tuple(event_list)
 
-        if nc_level in 'low':
+        if nc_level == 'low':
             self.apply_thermo_coeffs()
             self._save_netCDF(file_path)
 
@@ -711,10 +711,20 @@ class Raw_Profile():
 
         :param string file_path: file name
         """
-        file_name = str(self.meta.get("location")) + \
-                    str(self.meta.get("platform_id")) + "CMT" + \
-                    ".a0." + self.meta.get("timestamp").replace("_", ".") + ".cdf"
-        file_name = os.path.join(os.path.dirname(file_path), file_name)
+
+        if '.nc' in file_path or '.cdf' in file_path:
+            file_name = file_path
+
+        elif self.meta is not None:
+            file_name = str(self.meta.get("location")) + \
+                        str(self.meta.get("platform_id")) + "CMT" + \
+                        ".a0." + self.meta.get("timestamp").replace("_", ".") + ".cdf"
+            file_name = os.path.join(os.path.dirname(file_path), file_name)
+
+        else:
+            file_name = self.file_path.replace('.json', '.nc').replace('.bin', '.nc')
+
+
         main_file = netCDF4.Dataset(file_name, "w",
                                     format="NETCDF4", mmap=False)
 

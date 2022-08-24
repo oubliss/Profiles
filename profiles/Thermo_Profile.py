@@ -284,11 +284,18 @@ class Thermo_Profile():
 
         :param string file_path: file name
         """
-        file_name = str(self._meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
-                    str(self._meta.get("platform_id")) + "CMT" + \
-                    "thermo_" + self._ascent_filename_tag + ".c1." + \
-                    self._meta.get("timestamp").replace("_", ".") + ".cdf"
-        file_name = os.path.join(os.path.dirname(file_path), file_name)
+        if '.nc' in file_path or '.cdf' in file_path:
+            file_name = file_path
+        elif self._meta is not None:
+            file_name = str(self._meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
+                        str(self._meta.get("platform_id")) + "CMT" + \
+                        "thermo_" + self._ascent_filename_tag + ".c1." + \
+                        self._meta.get("timestamp").replace("_", ".") + ".cdf"
+            file_name = os.path.join(os.path.dirname(file_path), file_name)
+
+        else:
+            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+
 
         main_file = netCDF4.Dataset(file_name, "w",
                                     format="NETCDF4", mmap=False)
@@ -368,11 +375,11 @@ class Thermo_Profile():
         # LAT
         lat_var = main_file.createVariable("lat", "f8", ("time",))
         lat_var[:] = self.lat.magnitude
-        lat_var = str(self.lat.units)
+        lat_var.units = str(self.lat.units)
         # LON
         lon_var = main_file.createVariable("lon", "f8", ("time",))
         lon_var[:] = self.lon.magnitude
-        lon_var = str(self.lon.units)
+        lon_var.units = str(self.lon.units)
 
         main_file.close()
 
