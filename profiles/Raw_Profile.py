@@ -467,7 +467,7 @@ class Raw_Profile():
                 if rotation_list is None:
                     # Create array of lists with one list per [ve, vn, vd,
                     # roll, pitch, yaw, time]
-                    rotation_list = [[] for x in range(7)]
+                    rotation_list = [[] for x in range(10)]
 
                     sensor_names["NKF1"] = {}
 
@@ -478,6 +478,9 @@ class Raw_Profile():
                     sensor_names["NKF1"]["Roll"] = 3
                     sensor_names["NKF1"]["Pitch"] = 4
                     sensor_names["NKF1"]["Yaw"] = 5
+                    sensor_names["NKF1"]["PN"] = 6
+                    sensor_names["NKF1"]["PE"] = 7
+                    sensor_names["NKF1"]["PD"] = 8
                     sensor_names["NKF1"]["TimeUS"] = -1
 
                 # Read fields into rotation_list, including TimeUS
@@ -491,6 +494,8 @@ class Raw_Profile():
                             else:
                                 rotation_list[value].append(time)
                         elif 'VE' in key or 'VN' in key or 'VD' in key:
+                            rotation_list[value].append(elem["data"][key])
+                        elif 'PE' in key or 'PN' in key or 'PD' in key:
                             rotation_list[value].append(elem["data"][key])
                         else:  # Roll, pitch, yaw
                             rotation_list[value].append(elem["data"][key])
@@ -574,6 +579,9 @@ class Raw_Profile():
             if i < 3:
                 rotation_list[i] = np.array(rotation_list[i]) \
                                             * units.m / units.s
+            elif i >= 6:
+                rotation_list[i] = np.array(rotation_list[i]) \
+                                   * units.m
             else:
                 rotation_list[i] = np.array(rotation_list[i]) * units.deg
 
@@ -724,12 +732,45 @@ class Raw_Profile():
         # yaw
         rot_list.append(main_file["rotation"].variables["yaw"])
         rot_list[5] = np.array(rot_list[5]) * units.deg
+        # Estimated distance from origin (N component)
+        rot_list.append(main_file["rotation"].variables["PN"])
+        rot_list[6] = np.array(rot_list[6]) * units.m
+        # Estimated distance from origin (E component)
+        rot_list.append(main_file["rotation"].variables["PE"])
+        rot_list[6] = np.array(rot_list[7]) * units.m
+        # Estimated distance from origin (Down component)
+        rot_list.append(main_file["rotation"].variables["PD"])
+        rot_list[6] = np.array(rot_list[8]) * units.m
         # time
         rot_list.append(netCDF4.num2date(main_file["rotation"].
                                          variables["time"][:],
                                          units="microseconds since \
                                          2010-01-01 00:00:00:00"))
         self.rotation = tuple(rot_list)
+
+        #
+        # WIND
+        #
+        wind_list = []
+        # Wdir
+        wind_list.append(main_file['wind'].variables['wdir'])
+        wind_list[0] = np.array(wind_list[0]) * units.deg
+        # Wspeed
+        wind_list.append(main_file['wind'].variables['wspd'])
+        wind_list[1] = np.array(wind_list[2]) * units.m / units.s
+        # R13
+        wind_list.append(main_file['wind'].variables['R13'])
+        # wind_list[0] = np.array(wind_list[0]) * units.deg
+        # R23
+        wind_list.append(main_file['wind'].variables['R23'])
+        # wind_list[0] = np.array(wind_list[0]) * units.deg
+        # R33
+        wind_list.append(main_file['wind'].variables['R33'])
+        # wind_list[0] = np.array(wind_list[0]) * units.deg
+        wind_list.append(netCDF4.num2date(main_file["wind"].variables["time"][:],
+                                          units="microseconds since 2010-01-01 00:00:00:00"))
+
+        self.wind = tuple(wind_list)
 
         #
         # Other Attributes
@@ -950,6 +991,9 @@ class Raw_Profile():
         roll = rot_grp.createVariable("roll", "f8", ("rot_time", ))
         pitch = rot_grp.createVariable("pitch", "f8", ("rot_time", ))
         yaw = rot_grp.createVariable("yaw", "f8", ("rot_time", ))
+        pn = rot_grp.createVariable("PN", "f8", ("rot_time", ))
+        pe = rot_grp.createVariable("PE", "f8", ("rot_time", ))
+        pd = rot_grp.createVariable("PD", "f8", ("rot_time", ))
         time = rot_grp.createVariable("time", "i8", ("rot_time", ))
 
         ve[:] = self.rotation[0].magnitude
@@ -958,6 +1002,9 @@ class Raw_Profile():
         roll[:] = self.rotation[3].magnitude
         pitch[:] = self.rotation[4].magnitude
         yaw[:] = self.rotation[5].magnitude
+        pn[:] = self.rotation[6].magnitude
+        pe[:] = self.rotation[7].magnitude
+        pd[:] = self.rotation[8].magnitude
         time[:] = netCDF4.date2num(self.rotation[-1], units="microseconds \
                                    since 2010-01-01 00:00:00:00")
 
@@ -967,6 +1014,9 @@ class Raw_Profile():
         roll.units = "deg"
         pitch.units = "deg"
         yaw.units = "deg"
+        pn.units = 'meters'
+        pe.units = 'meters'
+        pd.units = 'meters'
         time.units = "microseconds since 2010-01-01 00:00:00:00"
 
         # WIND
