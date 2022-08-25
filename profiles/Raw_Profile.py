@@ -57,6 +57,7 @@ class Raw_Profile():
         self.pos = None
         self.pres = None
         self.rotation = None
+        self.wind = None
         self.dev = dev
         self.baro = "BARO"
         self.serial_numbers = {}
@@ -260,6 +261,8 @@ class Raw_Profile():
         rotation_list = None
         event_list = None
         message_list = None
+        wind_list = None
+        rpm_list = None
         # sensor_names will be dictionary of dictionaries formatted
         # {
         #     "valid_from": ,
@@ -493,6 +496,42 @@ class Raw_Profile():
                             rotation_list[value].append(elem["data"][key])
                     except KeyError:
                         rotation_list[value].append(np.nan)
+
+            # Corrected WIND rotation matrix and the internal wind estimation from the copter
+            elif elem["meta"]["type"] == "WIND":
+                if wind_list is None:
+                    # Create array of lists with one list per [wdir, wspeed, R13, R23, R33, time]
+                    wind_list = [[] for x in range(6)]
+
+                    sensor_names["WIND"] = {}
+
+                    # Determine the field names
+                    sensor_names['WIND']['wdir'] = 0
+                    sensor_names['WIND']['wspeed'] = 1
+                    sensor_names['WIND']['R13'] = 2
+                    sensor_names['WIND']['R23'] = 3
+                    sensor_names['WIND']['R33'] = 4
+                    sensor_names['WIND']['TimeUS'] = -1
+
+
+
+                # Determine the field names
+                for key, value in sensor_names["WIND"].items():
+                    try:
+                        if 'Time' in key:
+                            time = dt.utcfromtimestamp(elem["meta"]["timestamp"])
+
+                            if time.year < 2000:
+                                raise KeyError("Time formatted incorrectly")
+                            else:
+                                wind_list[value].append(time)
+
+                        else:
+                            wind_list[value].append(elem["data"][key])
+                    except KeyError:
+                        wind_list[value].append(np.nan)
+
+
         #
         # Add the units
         #
@@ -548,6 +587,7 @@ class Raw_Profile():
         self.rotation = tuple(rotation_list)
         self.events = tuple(event_list)
         self.messages = tuple(message_list)
+        self.wind = tuple(wind_list)
 
         if nc_level == 'low':
             self.apply_thermo_coeffs()
@@ -928,6 +968,31 @@ class Raw_Profile():
         pitch.units = "deg"
         yaw.units = "deg"
         time.units = "microseconds since 2010-01-01 00:00:00:00"
+
+        # WIND
+        wind_grp = main_file.createGroup("/wind")
+        wind_grp.createDimension('wind_time', None)
+
+        time_var = wind_grp.createVariable("time", 'f8', ('wind_time',))
+        wdir_var = wind_grp.createVariable("wdir", 'f8', ('wind_time',))
+        wspd_var = wind_grp.createVariable("wspd", 'f8', ('wind_time',))
+        r13_var  = wind_grp.createVariable("R13", 'f8', ('wind_time',))
+        r23_var  = wind_grp.createVariable("R23", 'f8', ('wind_time',))
+        r33_var  = wind_grp.createVariable("R33", 'f8', ('wind_time',))
+
+        time_var[:] = netCDF4.date2num(self.wind[-1], units="microseconds since 2010-01-01 00:00:00:00")
+        wdir_var[:] = self.wind[0]
+        wspd_var[:] = self.wind[1]
+        r13_var[:] = self.wind[2]
+        r23_var[:] = self.wind[3]
+        r33_var[:] = self.wind[4]
+
+        time_var.units = "microseconds since 2010-01-01 00:00:00:00"
+        wdir_var.units = "deg"
+        wspd_var.units = "m/s"
+        r13_var.units = "None"
+        r23_var.units = "None"
+        r33_var.units = "None"
 
         # Assign global attributes and close the file
         main_file.baro = self.baro
