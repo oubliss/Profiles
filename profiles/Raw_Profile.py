@@ -58,6 +58,7 @@ class Raw_Profile():
         self.pres = None
         self.rotation = None
         self.wind = None
+        self.rpm = None
         self.dev = dev
         self.baro = "BARO"
         self.serial_numbers = {}
@@ -536,6 +537,33 @@ class Raw_Profile():
                     except KeyError:
                         wind_list[value].append(np.nan)
 
+            elif elem['meta']["type"] == "ESC":
+
+                if rpm_list is None:
+                    rpm_list = [[] for x in range(5)]
+
+                    sensor_names['ESC'] = {}
+
+                    # Can easily add more motors in the future, but will need to account for the case
+                    # where there are fewer motors that positions here. See TODO below
+                    sensor_names['ESC']['rpm1'] = 0
+                    sensor_names['ESC']['rpm2'] = 1
+                    sensor_names['ESC']['rpm3'] = 2
+                    sensor_names['ESC']['rpm4'] = 3
+                    sensor_names['ESC']['TimeUS'] = -1
+
+                # Determine the field names
+                for key, value in sensor_names["ESC"].items():
+
+                    if 'Time' in key:# and elem['data']['Instance'] == 0:
+                        # Since there are multiple times for each sequence of ESC messages, need to append a list of times
+                        # when the first message in the sequence of 4...
+                        rpm_list[value].append(elem['meta']["timestamp"])
+
+                    elif value == elem['data']['Instance']:
+                        rpm_list[value].append(elem['data']["RPM"])
+
+
 
         #
         # Add the units
@@ -585,6 +613,24 @@ class Raw_Profile():
             else:
                 rotation_list[i] = np.array(rotation_list[i]) * units.deg
 
+        # RPMs
+        num_motors = len(rpm_list) - 1
+
+        # Check to make sure there are equal numbers of ESC messages.
+        # TODO make this so that equal numbers aren't necessecary in case of fewer motors than motor positions
+        num_messages = np.unique([len(foo) for foo in rpm_list[0:num_motors]])
+
+        if len(num_messages) > 1:
+            print("ESC messages from each motor are different lengths. Someone should code this better, but "
+                  "Tyler is just trying to get this working for the current coptersonde")
+        else:
+            num_messages = num_messages[-1]
+
+
+        # Need to average the times between the motors
+        avg_times = [dt.utcfromtimestamp(np.nanmean(times, axis=0)) for times in np.reshape(rpm_list[-1], (num_messages, num_motors))]
+        rpm_list[-1] = avg_times
+
         #
         # Convert to tuple
         #
@@ -596,6 +642,7 @@ class Raw_Profile():
         self.events = tuple(event_list)
         self.messages = tuple(message_list)
         self.wind = tuple(wind_list)
+        self.rpm = tuple(rpm_list)
 
         if nc_level == 'low':
             self.apply_thermo_coeffs()
@@ -757,7 +804,7 @@ class Raw_Profile():
         wind_list[0] = np.array(wind_list[0]) * units.deg
         # Wspeed
         wind_list.append(main_file['wind'].variables['wspd'])
-        wind_list[1] = np.array(wind_list[2]) * units.m / units.s
+        wind_list[1] = np.array(wind_list[1]) * units.m / units.s
         # R13
         wind_list.append(main_file['wind'].variables['R13'])
         # wind_list[0] = np.array(wind_list[0]) * units.deg
@@ -1020,29 +1067,45 @@ class Raw_Profile():
         time.units = "microseconds since 2010-01-01 00:00:00:00"
 
         # WIND
-        wind_grp = main_file.createGroup("/wind")
-        wind_grp.createDimension('wind_time', None)
+        if self.wind is not None:
+            wind_grp = main_file.createGroup("/wind")
+            wind_grp.createDimension('wind_time', None)
 
-        time_var = wind_grp.createVariable("time", 'f8', ('wind_time',))
-        wdir_var = wind_grp.createVariable("wdir", 'f8', ('wind_time',))
-        wspd_var = wind_grp.createVariable("wspd", 'f8', ('wind_time',))
-        r13_var  = wind_grp.createVariable("R13", 'f8', ('wind_time',))
-        r23_var  = wind_grp.createVariable("R23", 'f8', ('wind_time',))
-        r33_var  = wind_grp.createVariable("R33", 'f8', ('wind_time',))
+            time_var = wind_grp.createVariable("time", 'f8', ('wind_time',))
+            wdir_var = wind_grp.createVariable("wdir", 'f8', ('wind_time',))
+            wspd_var = wind_grp.createVariable("wspd", 'f8', ('wind_time',))
+            r13_var  = wind_grp.createVariable("R13", 'f8', ('wind_time',))
+            r23_var  = wind_grp.createVariable("R23", 'f8', ('wind_time',))
+            r33_var  = wind_grp.createVariable("R33", 'f8', ('wind_time',))
 
-        time_var[:] = netCDF4.date2num(self.wind[-1], units="microseconds since 2010-01-01 00:00:00:00")
-        wdir_var[:] = self.wind[0]
-        wspd_var[:] = self.wind[1]
-        r13_var[:] = self.wind[2]
-        r23_var[:] = self.wind[3]
-        r33_var[:] = self.wind[4]
+            time_var[:] = netCDF4.date2num(self.wind[-1], units="microseconds since 2010-01-01 00:00:00:00")
+            wdir_var[:] = self.wind[0]
+            wspd_var[:] = self.wind[1]
+            r13_var[:] = self.wind[2]
+            r23_var[:] = self.wind[3]
+            r33_var[:] = self.wind[4]
 
-        time_var.units = "microseconds since 2010-01-01 00:00:00:00"
-        wdir_var.units = "deg"
-        wspd_var.units = "m/s"
-        r13_var.units = "None"
-        r23_var.units = "None"
-        r33_var.units = "None"
+            time_var.units = "microseconds since 2010-01-01 00:00:00:00"
+            wdir_var.units = "deg"
+            wspd_var.units = "m/s"
+            r13_var.units = "None"
+            r23_var.units = "None"
+            r33_var.units = "None"
+
+        # RPM
+        if self.rpm is not None:
+            rpm_grp = main_file.createGroup("/rpm")
+            rpm_grp.createDimension('rpm_time', None)
+
+            time_var = rpm_grp.createVariable("time", 'f8', ('rpm_time',))
+            time_var[:] = netCDF4.date2num(self.rpm[-1], units="microseconds since 2010-01-01 00:00:00:00")
+            time_var.units = "microseconds since 2010-01-01 00:00:00:00"
+
+            for motor_num in range(len(self.rpm) - 1):
+                rpm_var = rpm_grp.createVariable(f"rpm{motor_num+1}", 'f8', ('rpm_time',))
+                rpm_var[:] = self.rpm[motor_num]
+                rpm_var.units = 'rpm'
+
 
         # Assign global attributes and close the file
         main_file.baro = self.baro
