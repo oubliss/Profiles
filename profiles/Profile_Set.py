@@ -368,20 +368,26 @@ class Profile_Set():
 
         main_file.close()
 
-    """
+
     def save_netCDF(self, file_path):
+        """
         Stores all attributes of this Profile_Set object as a NetCDF
 
         :param string file_path: the file name to which attributes should be
            saved
-        
-        main_file = netCDF4.Dataset(os.path.join(self._root_dir,
-                                                 "processed", file_path),
+
+        """
+
+        file_name = str(self.profiles[0]._thermo_profile._meta.get("location"))[:5] + \
+                    str(self.profiles[0]._thermo_profile._meta.get("platform_id")) + ".c1." + \
+                    self.profiles[0]._thermo_profile._meta.get('timestamp').split('_')[0] + ".cdf"
+        f_name = os.path.join(os.path.dirname(file_path), file_name)
+        main_file = netCDF4.Dataset(f_name,
                                     "w", format="NETCDF4", mmap=False)
-        if self.meta is not None:
-            self.meta.write_public_meta(
-                os.path.join(self._root_dir,"processed", file_path)[:-3]
-                + "_meta.txt")
+        # if self._meta is not None:
+        #     self._meta.write_public_meta(
+        #         os.path.join(self._root_dir,"processed", file_path)[:-3]
+        #         + "_meta.txt")
         main_file.dev = str(self.dev)
         main_file.resolution = self.resolution
         main_file.res_units = self.res_units
@@ -421,6 +427,22 @@ class Profile_Set():
                                                           ("time",))
                     mr_var[:] = thermo.mixing_ratio.magnitude
                     mr_var.units = str(thermo.mixing_ratio.units)
+                except Exception:
+                    continue
+                # POTENTIAL TEMPERATURE
+                try:
+                    theta_var = profile_group.createVariable("theta", "f8",
+                                                          ("time",))
+                    theta_var[:] = thermo.theta.magnitude
+                    theta_var.units = str(thermo.theta.units)
+                except Exception:
+                    continue
+                # DEWPOINT TEMPERATURE
+                try:
+                    dewp_var = profile_group.createVariable("T_d", "f8",
+                                                          ("time",))
+                    dewp_var[:] = thermo.T_d.magnitude
+                    dewp_var.units = str(thermo.T_d.units)
                 except Exception:
                     continue
                 # TIME
@@ -522,13 +544,13 @@ class Profile_Set():
         #
         # META
         #
-        if self.meta is not None:
-            # print("\n\n" + str(self.meta.public_fields) + "\n\n")
-            for key in np.unique(self.meta.public_fields):
-                if self.meta.get(key) is not None:
-                    # print(key)
-                    main_file.key = self.meta.get(key)
-                    main_file.renameAttribute("key", key)
+        # if self.meta is not None:
+        #     # print("\n\n" + str(self.meta.public_fields) + "\n\n")
+        #     for key in np.unique(self.meta.public_fields):
+        #         if self.meta.get(key) is not None:
+        #             # print(key)
+        #             main_file.key = self.meta.get(key)
+        #             main_file.renameAttribute("key", key)
 
         main_file.close()
     """
@@ -540,3 +562,4 @@ class Profile_Set():
         for profile in self.profiles:
             to_return = to_return + "\t" + str(profile) + "\n"
         return to_return
+    """
