@@ -209,7 +209,7 @@ class Raw_Profile():
         to_return["yaw"] = self.rotation[5]
         to_return["alt"] = self.pres[3]
         to_return["pres"] = self.pres[0]
-        to_return["time"] = self.rotation[6]
+        to_return["time"] = self.rotation[-1]
 
         to_return["serial_numbers"] = self.serial_numbers
 
