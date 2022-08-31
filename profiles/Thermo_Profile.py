@@ -240,13 +240,19 @@ class Thermo_Profile():
             self.lat = np.full_like(self.gridded_times, -999.) * self._units('degrees')
             self.lon = np.full_like(self.gridded_times, -999.) * self._units('degrees')
 
-        minlen = min(len(self.alt), len(self.gridded_times), len(self.rh),
-                     len(self.pres), len(self.temp))
-        self.pres = self.pres[0:minlen]
-        self.temp = self.temp[0:minlen]
-        self.rh = self.rh[0:minlen]
-        self.alt = self.alt[0:minlen]
-        self.gridded_times = self.gridded_times[0:minlen]
+        """ 
+        TB --  I don't think this is needed... 
+        and it causes unexpected down stream issues...
+        may bite me later... 
+        If causing issues later, do 'minlen+1'
+        """
+        # minlen = min(len(self.alt), len(self.gridded_times), len(self.rh),
+        #              len(self.pres), len(self.temp))
+        # self.pres = self.pres[0:minlen]
+        # self.temp = self.temp[0:minlen]
+        # self.rh = self.rh[0:minlen]
+        # self.alt = self.alt[0:minlen]
+        # self.gridded_times = self.gridded_times[0:minlen]
 
         # Calculate mixing ratio
         self.mixing_ratio = calc.mixing_ratio_from_relative_humidity(

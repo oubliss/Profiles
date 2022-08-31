@@ -150,17 +150,23 @@ class Wind_Profile():
             self.lat = np.full_like(self.gridded_times, -999.)
             self.lon = np.full_like(self.gridded_times, -999.)
 
+        """ 
+        TB --  I don't think this is needed... 
+        and it causes unexpected down stream issues...
+        may bite me later... 
+        If causing issues later, do 'minlen+1'
+        """
+        # minlen = min([len(self.u), len(self.v), len(self.dir),
+        #               len(self.speed), len(self.alt), len(self.pres),
+        #               len(self.gridded_times)])
+        # self.u = self.u[0:minlen]
+        # self.v = self.v[0:minlen]
+        # self.dir = self.dir[0:minlen]
+        # self.speed = self.speed[0:minlen]
+        # self.alt = self.alt[0:minlen]
+        # self.pres = self.pres[0:minlen]
+        # self.gridded_times = self.gridded_times[0:minlen]
 
-        minlen = min([len(self.u), len(self.v), len(self.dir),
-                      len(self.speed), len(self.alt), len(self.pres),
-                      len(self.gridded_times)])
-        self.u = self.u[0:minlen]
-        self.v = self.v[0:minlen]
-        self.dir = self.dir[0:minlen]
-        self.speed = self.speed[0:minlen]
-        self.alt = self.alt[0:minlen]
-        self.pres = self.pres[0:minlen]
-        self.gridded_times = self.gridded_times[0:minlen]
         #
         # save NC
         #
