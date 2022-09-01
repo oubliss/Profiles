@@ -617,15 +617,21 @@ class Raw_Profile():
         num_motors = len(rpm_list) - 1
 
         # Check to make sure there are equal numbers of ESC messages.
-        # TODO make this so that equal numbers aren't necessecary in case of fewer motors than motor positions
         num_messages = np.unique([len(foo) for foo in rpm_list[0:num_motors]])
 
         if len(num_messages) > 1:
-            print("ESC messages from each motor are different lengths. Someone should code this better, but "
-                  "Tyler is just trying to get this working for the current coptersonde")
+            # If the number of messages differ between the 4 motors, need to do some extra stuff
+            # Use the lower value
+            num_messages = np.min(num_messages)
+
+            # Truncate the arrays to the lower value
+            for i in range(num_motors):
+                rpm_list[i] = rpm_list[i][:num_messages]
+
+            rpm_list[-1] = rpm_list[-1][:num_messages * num_motors]
+
         else:
             num_messages = num_messages[-1]
-
 
         # Need to average the times between the motors
         avg_times = [dt.utcfromtimestamp(np.nanmean(times, axis=0)) for times in np.reshape(rpm_list[-1], (num_messages, num_motors))]
