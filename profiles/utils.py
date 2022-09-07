@@ -4,6 +4,7 @@ Utils contains misc. functions to aid in data analysis.
 import sys
 import os
 import warnings
+import requests
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -81,6 +82,7 @@ event_IDs = """
 #define DATA_WINCH_RATE_CONTROL             70
 """
 
+
 def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
                 units=None, indices=(None, None), base_start=None):
     """ Calculates times at which data means should be calculated.
@@ -123,13 +125,21 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
         new_base = np.arange((base[indices[0]] + 0.5*new_res).magnitude,
                              (base[indices[1]] - 0.5*new_res).magnitude,
                              new_res.magnitude)
+        base_edges = np.arange((base[indices[0]]).magnitude,
+                             (base[indices[1]]).magnitude,
+                             new_res.magnitude)
     else:
         new_base = np.arange(base_start.magnitude,
                              (base[indices[1]] - 0.5 * new_res).magnitude,
                              new_res.magnitude)
+        base_edges = np.arange(base_start.magnitude,
+                             (base[indices[1]] - 0.5 * new_res).magnitude,
+                             new_res.magnitude)
 
     new_base = np.array(new_base) * base.units
+    base_edges = np.array(base_edges) * base.units
 
+    # Find the times where the new_base values occur in the profile
     ind_in_grid = []
     i = indices[0]
     for elem in new_base:
@@ -140,14 +150,25 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
 
     new_times = [base_times[i] for i in ind_in_grid]
 
+    # Find the times where the base_edges values occur in the profile
+    ind_in_grid = []
+    i = indices[0]
+    for elem in base_edges:
+        while base[i] < elem and i < indices[1]:
+            i += 1
+        ind_in_grid.append(i)
+        i += 1
+
+    time_edges = [base_times[i] for i in ind_in_grid]
 
     if new_res.dimensionality == units.Pa.dimensionality:
         new_base = -1*new_base
+        base_edges = -1*base_edges
 
     # Remove duplicates:
     # new_times, indices = np.unique(new_times, return_index=True)
     # new_base = new_base[indices]
-    return (new_times, new_base)
+    return (new_times, new_base, time_edges, base_edges)
 
 
 def regrid_data(data=None, data_times=None, gridded_times=None, units=None):
@@ -562,7 +583,7 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
                     # Get user opinion
                     valid = input('Correct? (Y/n): ')
                     # If good, wrap up the profile
-                    if valid in "yYyesYes" or valid is "":
+                    if valid in "yYyesYes" or valid == "":
                         plt.close()
                         if end_ind_des is None:
                             print("Could not find end time des (LineTag B)")
