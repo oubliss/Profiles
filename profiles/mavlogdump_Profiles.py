@@ -288,7 +288,7 @@ def process(args):
             # Now print out this object with stringified properly.
             # print(json.dumps(outMsg) + '\n')
 
-            # Super hacky stuff added by Tyler Bell in Feb 19
+            # Super hacky stuff added by Tyler Bell in Feb 19 and updated to be more hacky Sept 22
             if json_output is not None:
                 json_output.write((json.dumps(outMsg) + '\n'))
 
@@ -296,14 +296,15 @@ def process(args):
                 dt = datetime.utcfromtimestamp(timestamp)
 
                 if args.json_out_dir is not None:
-                    json_output = \
-                        open(os.path
-                             .join(args.json_out_dir,
-                                   dt.strftime("%Y%m%d_%H%M.json"
-                                               .format(args.log
-                                                       .split('/')[-1]
-                                                       .split('.')[0]))),
-                             mode='w')
+                    if dt.strftime("%Y%m%d") in args.log.split('/')[-1].split('.')[0]:
+                        json_output_fn = os.path.join(args.json_out_dir, args.log.split('/')[-1].split('.')[0] + '.json')
+                    else:
+                        json_output_fn = os.path.join(args.json_out_dir, dt.strftime("%Y%m%d_%H%M.json"))
+
+                    json_output = open(json_output_fn, 'w')
+
+                    # json_output = open(os.path.join(args.json_out_dir, dt.strftime(
+                    #     "%Y%m%d_%H%M.json".format(args.log.split('/')[-1].split('.')[0]))), mode='w')
 
         # CSV format outputs columnar data with a user-specified delimiter
         elif args.format == 'csv':
@@ -358,11 +359,4 @@ def process(args):
         for msgType in available_types:
             print(msgType)
 
-    print( str(os.path.join(args.json_out_dir,
-                            dt.strftime("%Y%m%d_%H%M.json"
-                                        .format(args.log.split('/')[-1]
-                                                .split('.')[0])))))
-    return str(os.path.join(args.json_out_dir,
-                            dt.strftime("%Y%m%d_%H%M.json"
-                                        .format(args.log.split('/')[-1]
-                                                .split('.')[0]))))
+    return json_output_fn

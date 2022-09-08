@@ -120,6 +120,8 @@ class Profile():
         self.dev = dev  # TODO this is not used
         self.resolution = resolution * self._units.parse_expression(res_units)
         self.ascent = ascent
+        self._ascent_filename_tag = 'ascent' if ascent else 'descent'
+
         if ".nc" in file_path or ".NC" in file_path:
             self.file_path = file_path[:-3]
         elif ".json" in file_path or ".JSON" in file_path:
@@ -300,7 +302,10 @@ class Profile():
 
         return self._thermo_profile
 
-    def save_netcdf(self, file_path=os.getcwd()):
+    def save_netcdf(self, file_path=None):
+        if file_path is None:
+            file_path = self.file_path
+
         if '.nc' in file_path or '.cdf' in file_path:
             file_name = file_path
         elif self.meta is not None:
