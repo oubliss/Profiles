@@ -226,7 +226,7 @@ class Profile():
                   "get_thermo_profile and get_wind_profile before trying "
                   "again.")
 
-    def get_wind_profile(self, file_path=None):
+    def get_wind_profile(self, file_path=None, algorithm='linear'):
         """ If a Wind_Profile object does not already exist, it is created when
         this method is called.
 
@@ -241,6 +241,7 @@ class Profile():
             wind_data = self._raw_profile.wind_data()
             self._wind_profile = \
                 Wind_Profile(wind_data, self.resolution,
+                             algorithm=algorithm,
                              gridded_times=self.gridded_times,
                              gridded_base=self.gridded_base,
                              indices=self.indices, ascent=self.ascent,
