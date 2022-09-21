@@ -1,5 +1,6 @@
 import os
 import contextlib
+import numpy as np
 import pandas as pd
 from profiles.conf import coef_info
 from abc import abstractmethod
@@ -28,7 +29,7 @@ class Coef_Manager_Base:
         pass
 
     @abstractmethod
-    def get_coefs(self, type, serial_number):
+    def get_coefs(self, type, serial_number, equation=None):
         """ Get the coefs for the sensor with the given type and serial number.
 
         :param str type: "Imet" or "RH" or "Wind"
@@ -93,7 +94,7 @@ class Coef_Manager(Coef_Manager_Base):
         """
         return self.sub_manager.get_sensors(scoopID)
 
-    def get_coefs(self, type, serial_number):
+    def get_coefs(self, type, serial_number, equation=None):
         """ Get the coefs for the sensor with the given type and serial number.
 
         :param str type: "Imet" or "RH" or "Wind"
@@ -101,7 +102,7 @@ class Coef_Manager(Coef_Manager_Base):
         :rtype: dict
         :return: information about the sensor, including offset OR coefs and calibration equation
         """
-        return self.sub_manager.get_coefs(type, str(serial_number))
+        return self.sub_manager.get_coefs(type, str(serial_number), equation)
 
 
 class CSV_Coef_Manager(Coef_Manager_Base):
@@ -150,7 +151,7 @@ class CSV_Coef_Manager(Coef_Manager_Base):
                 "imet3": str(sensors.imet3.values[0]), "imet4": None, "rh1": str(sensors.rh1.values[0]),
                 "rh2": str(sensors.rh2.values[0]), "rh3": str(sensors.rh3.values[0]), "rh4": None}
 
-    def get_coefs(self, stype, serial_number):
+    def get_coefs(self, stype, serial_number, equation=None):
         """ Get the coefs for the sensor with the given type and serial number.
 
         :param str stype: "Imet" or "RH" or "Wind"
@@ -158,28 +159,40 @@ class CSV_Coef_Manager(Coef_Manager_Base):
         :rtype: dict
         :return: information about the sensor, including offset OR coefs and calibration equation
         """
+        print(serial_number)
         try:
             serial_number = int(serial_number)
         except ValueError:
             # This means it was a tail number, which can't be cast  to int
             pass
 
-        try:
-            coefs = self.coefs
-            # a = coefs.A[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            # b = coefs.B[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            # c = coefs.C[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            # d = coefs.D[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            # eq = coefs.Equation[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
-            # offset = coefs.Offset[(coefs.SerialNumber == serial_number) & (coefs.SensorType == stype)].values[0]
+        coefs = self.coefs.copy().to_dict('list')
 
-            a = coefs.A[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
-            b = coefs.B[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
-            c = coefs.C[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
-            d = coefs.D[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
-            eq = coefs.Equation[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
-            offset = coefs.Offset[(coefs.SerialNumber == str(serial_number)) & (coefs.SensorType == stype)].values[0]
-        except IndexError as exc:
-            raise RuntimeError(f'Could not find serial number "{serial_number}" with sensor type "{stype}" in one of the required coefficients (A,B,C,D,Equation,Offset).') from exc
+        foo = np.where((np.array(coefs['SerialNumber']) == str(serial_number)) & (np.array(coefs['SensorType']) == stype))[0]
 
-        return {"A":a, "B":b, "C":c, "D":d, "Equation":eq, "Offset":offset}
+        if len(foo) == 1:
+            ind = foo[0]
+
+        elif len(foo) == 0:
+            raise RuntimeError(f'Could not find serial number "{serial_number}" with sensor type "{stype}" '
+                               f'in one of the required coefficients (A,B,C,D,Equation,Offset).')
+
+        else:
+            if equation is None:
+                raise RuntimeError(f'Multiple entries found for "{serial_number}" with sensor type "{stype}", '
+                                   f'be sure to specify an equation type: {np.array(coefs["Equation"])[foo]}')
+
+            bar = np.where(np.array(coefs['Equation'])[foo] == str(equation))[0]
+
+            if len(bar) != 1:
+                raise RuntimeError(f'The equation "{equation}" for "{serial_number}" with sensor type "{stype}"'
+                                   f'is likely not in the table...')
+            else:
+                ind = foo[bar][0]
+
+        return {"A": coefs['A'][ind],
+                "B": coefs['B'][ind],
+                "C": coefs['C'][ind],
+                "D": coefs['D'][ind],
+                "Equation": coefs['Equation'][ind],
+                "Offset": coefs['Offset'][ind]}

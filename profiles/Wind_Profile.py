@@ -26,11 +26,8 @@ class Wind_Profile():
        If not, False.
     """
 
-    def __init__(self, *args, **kwargs):
-        if len([*args]) > 0:
-            self._init2(*args, **kwargs)
 
-    def _init2(self, wind_dict, resolution, file_path=None,
+    def __init__(self, wind_dict, resolution, algorithm='linear', file_path=None,
                gridded_times=None, gridded_base=None, indices=(None, None),
                ascent=True, units=None, pos=None, nc_level='low', meta=None):
         """ Creates Wind_Profile object based on rotation data at the specified
@@ -107,7 +104,14 @@ class Wind_Profile():
                 wind_dict["speed_down"].units
             wind_dict["time"] = np.array(wind_dict["time"])[selection]
 
-        direction, speed, time = self._calc_winds(wind_dict)
+        if algorithm == 'linear':
+            direction, speed, time = self._calc_winds_linear(wind_dict)
+        elif algorithm == 'quadratic':
+            print("this wind algorithm isn't implmented")
+            return
+        elif algorithm == 'leso':
+            print("This wind algorithm isn't implmented")
+            return
 
         direction = direction % (2*np.pi)
 
@@ -188,7 +192,185 @@ class Wind_Profile():
         self.pres = self.pres[:new_len]
         self.gridded_times = self.gridded_times[:new_len]
 
-    def _calc_winds(self, wind_data):
+
+    def ext_leso(self, rpma, rho_air, pn, pe, pd, vn, ve, vd, roll, pitch, yaw, h, order):
+        from scipy.signal import StateSpace
+        from control.matlab import ss, c2d
+
+
+        # Dynamic Model with extended state:
+        # x_3_dot = h(t) = 0, assuming generalized distrubance to be constant or slowly changing
+        # For this study, the generalized disturbance is mainly drag caused by wind
+
+        m = 2.28  # Mass (kg)
+        g = 9.81  # Gravity (m/s2)
+        dt = 0.1  # Sampling period (must be equal to CS logging rate)
+        L = len(pn)
+        wind_i = np.zeros((3, L))
+
+        # Propeller model parameters
+        # From Gill & D'Andrea 2019
+
+        # APCE-10x7
+        R = 0.14
+        cl0 = 0.75;   cla = 6.6
+        cd0 = 0.12;   cda = 2.8;        Nb = 2
+        delta = 0.12; theta_tip = 0.21; c_tip = 5.7e-3
+
+        sigma = Nb * c_tip / (np.pi * R)
+
+        # State space model of mosition and velocity of the drone
+        A = np.matrix([[0, 1, 0  ],
+                       [0, 0, 1/m],
+                       [0, 0, 0  ]])
+        B = np.matrix([0, 1, 0]).T
+        E = np.matrix([0, 0, 1]).T
+        BF = np.concatenate((B, E), axis=1)
+        Cv = np.matrix([[1, 0, 0],
+                        [0, 1, 0]])
+
+        # LESO gains
+        lxp = 4; lyp = 3; lzp = 4  # Position error gains
+        lxv = 4; lyv = 3; lzv = 4  # Velocity error gains
+        alpha = 1.8   # Gain boost factor for LESOs of higher order
+
+        # Observer System creation
+        xcell = {}
+        ycell = {}
+        zcell = {}
+
+        for i in range(order):
+            Lxp = np.matrix([3*lxp, 3*lxp*lxp, lxp*lxp*lxp]).T
+            Lxv = np.matrix([3*lxv, 3*lxv*lxv, lxv*lxv*lxv])
+            aa = A - np.concatenate((Lxp, Lxv), axis=1)*cv
+            ab = np.concatenate((BF, Lxp, Lxv), axis=1)
+            ac = np.identity(3)
+            ad = 0 * np.concatenate((BF, Lxp, Lxv), axis=1)
+            aux = ss(aa, ab, ac, ad)
+            xcell[i] = c2d(aux, dt)
+
+            Lyp = np.matrix([3 * lyp, 3 * lyp * lyp, lyp * lyp * lyp]).T
+            Lyv = np.matrix([3 * lyv, 3 * lyv * lyv, lyv * lyv * lyv])
+
+            ba = A - np.concatenate((Lyp, Lyv), axis=1) * cv
+            bb = np.concatenate((BF, Lyp, Lyv), axis=1)
+            bc = np.identity(3)
+            bd = 0 * np.concatenate((BF, Lyp, Lyv), axis=1)
+            aux = ss(ba, bb, bc, bd)
+            ycell[i] = c2d(aux, dt)
+
+            Lzp = np.matrix([3 * lzp, 3 * lzp * lzp, lzp * lzp * lzp]).T
+            Lzv = np.matrix([3 * lzv, 3 * lzv * lzv, lzv * lzv * lzv])
+
+            ca = A - np.concatenate((Lzp, Lzv), axis=1) * cv
+            cb = np.concatenate((BF, Lzp, Lzv), axis=1)
+            cc = np.identity(3)
+            cd = 0 * np.concatenate((BF, Lzp, Lzv), axis=1)
+            aux = ss(ca, cb, cc, cd)
+            zcell[i] = c2d(aux, dt)
+
+        # Preallocate arrays
+        Nest = np.zeros((3, L, order))
+        Eest = np.zeros((3, L, order))
+        Dest = np.zeros((3, L, order))
+        Dn = np.zeros((L))
+        De = np.zeros((L))
+        Dd = np.zeros((L))
+        F_h = np.zeros((L))
+        F_t = np.zeros((L))
+        Tq = np.zeros((L))
+
+        for k in range(L-1):
+
+            # Transform wind from NED to Body
+            wind_b = utils.ned2body(wind_i[0, k], wind_i[1, k], wind_i[2, k], roll[k], pitch[k], yaw[k])
+
+            # compute propeller H-forces
+            omega = 2*np.pi*rpms[k] / 60  # Average angular velocity of the propellers [rad/s]
+            lambda_c = wind_b[2] / (omega * R)  # Perpendicular air velocity (normalized)
+            mu = np.abs(wind_b[0]) / (omega * R)  # Tangential air velocity (normalized)
+
+            # Get thrust from extended prop model
+            lambda_i = 1/8 * (
+                    -4*lambda_c +
+                    cla*sigma*(delta-1) +
+                    np.sqrt(
+                        16*lambda_c**2 +
+                        8*cla*(delta-1)*lambda_c*sigma +
+                        (1-1/delta)*sigma*(-8*cl0*delta*(1+delta) +
+                                           cla*(cla*(delta-1)*delta*sigma - 8*(2*delta+mu**2)*theta_tip)) -
+                        8*cl0*mu**2*sigma*np.log(delta)))
+
+            lambda_f = lambda_c + lambda_i
+
+            # Thrust coefficient
+            c_ft = (0.5 * sigma / delta) * (
+                    (1 - delta) * (cl0 * delta * (1 + delta) - 2 * cla * delta * (lambda_f-theta_tip) +
+                                   cla * mu**2 * theta_tip) - cl0 * delta * mu * mu * log(delta))
+
+            # Horizontal drag coeff
+            c_fh = (0.5*mu*sigma/delta)*(
+                    (1-delta)*(2*cd0*delta + theta_tip*((cla-2*cda)*lambda_f + 2*cda*theta_tip)) -
+                    cl0*delta*lambda_f*np.log(delta))
+
+            # Compute forces
+            F_t[k] = np.cos(np.deg2rad(4)) * c_ft * 0.5 * rho_air[k] * np.pi * omega**2 * R**4
+            F_h[k] = 4*np.sign(wind_b[0]) * c_fh * 0.5 * rho_air[k] * np.pi * omega**2 * R**4
+
+            # Compute thrust using prop model, rpms, and intake air velocity
+            Tq[k] = F_t[k]
+            if np.isnan(Tq[k]):
+                Tq[k] = 0
+
+            # Transform propeller forces from body to NED
+            F_H = utils.body2ned(np.matrix([F_h[k], 0, 0]).T, roll[k], pitch[k], yaw[k])
+            T_corr = utils.body2ned(np.matrix([0, 0, -Tq[k]]).T, roll[k], pitch[k], yaw[k])
+            U = np.matrix([0, 0, g]).T + (T_corr + F_H)/m
+
+            # LESO Core function
+            for j in range(order):
+                if j == 0:  # 1st order loop estimation
+                    Nest[:, k+1, j] = xcell[j].a * Nest[:, k, j] + \
+                                      xcell[j].b * np.matrix([U[0], pn[k], vn[k]])
+                    Eest[:, k+1, j] = ycell[j].a * Eest[:, k, j] + \
+                                      ycell[j].b * np.matrix([U[1], pe[k], ve[k]])
+                    Dest[:, k+1, j] = zcell[j].a * Dest[:, k, j] + \
+                                      zcell[j].b * np.matrix([U[2], pd[k], vd[k]])
+                else:  # 2nd order loop. Computes additional drag forces at higher gains
+                    Nest[:, k+1, j] = xcell[j].a * Nest[:, k, j] + \
+                                      xcell[j].b * np.matrix([U[0]+Dn[k+1]/m, Nest[0, k+1, j-1], Nest[1, k+1, j-1]]).T
+                    Eest[:, k+1, j] = ycell[j].a * Eest[:, k, j] + \
+                                      ycell[j].b * np.matrix([U[1]+De[k+1]/m, Eest[0, k+1, j-1], Eest[1, k+1, j-1]]).T
+                    Dest[:, k+1, j] = zcell[j].a * Dest[:, k, j] + \
+                                      zcell[j].b * np.matrix([U[2]+Dd[k+1]/m, Dest[0, k+1, j-1], Dest[1, k+1, j-1]]).T
+
+                # In case the 2nd order or higher, add the additional drag forces to the 1st order.
+                Dn[k+1] = Dn[k+1] + Nest[2, k+1, j]
+                De[k+1] = De[k+1] + Nest[2, k+1, j]
+                Dd[k+1] = Dd[k+1] + Nest[2, k+1, j]
+
+            # wind velocity estimation
+            # Extract drag forces and velocity estimates. Transform to body frame
+            D_b = utils.ned2body(np.matrix([Dn[k+1], De[k+1], Dd[k+1]]).T, roll[k], pitch[k], yaw[k])
+            V_b = utils.ned2body(np.matrix([Nest[1, k+1, -1], Eest[1, k+1, -1], Dest[1, k+1, -1]]).T,
+                                 roll[k], pitch[k], yaw[k])
+
+            # Second order friction equation for each up/down leg
+            # Work in progress, not final
+            cf_h = [0.037, -.12]; cf_v = -0.14388*Dd[k+1]/9.81 + 0.352; # These shouldn't be hard coded here, they must be adjustable params outside this function.
+            wind_b[0] = V_b[0] + np.sign(D_b[0])*np.sqrt(np.abs(D_b[0]))/(cf_h[0]*rho_air[k])
+            wind_b[1] = V_b[1] + np.sign(D_b[1])*np.sqrt(np.abs(D_b[1]))/(cf_h[0]*rho_air[k])
+            wind_b[2] = V_b[2] + np.sign(D_b[2])*np.sqrt(np.abs(D_b[2]))/(cf_v*rho_air[k])
+
+            # Transform wind vector from body to inertial frame
+            wind_i[:, k+1] = utils.body2ned(wind_b, roll[k], pitch[k], yaw[k])
+
+            return Dn, De, Dd, Nest, Eest, Dest, wind_i, Tq, F_h
+
+
+
+
+    def _calc_winds_linear(self, wind_data):
         """ Calculate wind direction, speed, u, and v. Currently, this only
         works when the craft is HORIZONTALLY STATIONARY.
         :param dict wind_data: dictionary from Raw_Profile.get_wind_data()
@@ -228,7 +410,7 @@ class Wind_Profile():
             az[i] = np.arctan2(R[1, 2], R[0, 2])
 
 
-        coefs = utils.coef_manager.get_coefs('Wind', tail_num)
+        coefs = utils.coef_manager.get_coefs('Wind', tail_num, 'E1')
         speed = float(coefs['A']) * np.sqrt(np.tan(psi)).magnitude + float(coefs['B'])
 
         speed = speed * self._units.m / self._units.s

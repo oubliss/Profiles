@@ -391,6 +391,86 @@ def qc(data, max_bias, max_variance):
     return combined_sensor_flags
 
 
+def get_place_from_lat_lon(lat, lon, zoom=16):
+    """
+    Pings the nominatim API to get a place name from a lat/lon pair.
+
+    Example zoom levels:
+     - 16: Street level
+     - 12: Town Level
+     - 8: County Level
+
+    :param lat:
+    :param lon:
+    :param zoom:
+    :return:
+    """
+
+    url = "https://nominatim.openstreetmap.org/reverse.php"
+
+    params = {
+        'lat': lat,
+        'lon': lon,
+        'zoom': zoom,
+        'format': 'jsonv2'
+    }
+
+    # format query string and return query value
+    result = requests.get(url, params)
+
+    return ','.join(result.json()['display_name'].split(',')[:-1])
+
+
+def ned2body(xned, yned, zned, roll, pitch, yaw):
+    croll = np.cos(roll)
+    sroll = np.sin(roll)
+    cpitch = np.cos(pitch)
+    spitch = np.sin(pitch)
+    cyaw = np.cos(yaw)
+    syaw = np.sin(yaw)
+
+    Rx = np.matrix([[1, 0, 0],
+                    [0, croll, sroll],
+                    [0, -sroll, croll]])
+    Ry = np.matrix([[cpitch, 0, -spitch],
+                    [0, 1, 0],
+                    [spitch, 0, cpitch]])
+    Rz = np.matrix([[cyaw, -syaw, 0],
+                    [syaw, cyaw, 0],
+                    [0, 0, 1]])
+
+    R = Rz * Ry * Rx
+
+    a = R * np.matrix([xned, yned, zned]).T
+
+    return float(a[0]), float(a[1]), float(a[2])
+
+
+def body2ned(xb, yb, zb, roll, pitch, yaw):
+    croll = np.cos(roll)
+    sroll = np.sin(roll)
+    cpitch = np.cos(pitch)
+    spitch = np.sin(pitch)
+    cyaw = np.cos(yaw)
+    syaw = np.sin(yaw)
+
+    Rx = np.matrix([[croll, -sroll, 0],
+                    [sroll, croll, 0],
+                    [0, 0, 1]])
+    Ry = np.matrix([[cpitch, 0, spitch],
+                    [0, 1, 0],
+                    [-spitch, 0, cpitch]])
+    Rz = np.matrix([[1, 0, 0],
+                    [0, cyaw, -syaw],
+                    [0, syaw, cyaw]])
+
+    R = Rx * Ry * Rz
+
+    a = R * np.matrix([xb, yb, zb]).T
+
+    return float(a[0]), float(a[1]), float(a[2])
+
+
 def _bias(data, max_abs_error):
     """ This method identifies sensors with excessive biases and returns a
     list flagging sensors determined to be questionable.
@@ -478,7 +558,7 @@ def _s_dev(data, max_abs_error):
 
 
 def identify_profile(alts, alt_times, confirm_bounds=True,
-                     profile_start_height=None, to_return=[], ind=0):
+                     profile_start_height=None, to_return=None, ind=0):
     """ Identifies the temporal bounds of all profiles in the data file. These
     assumptions must be valid:
     * The craft starts and ends each profile below profile_start_height
@@ -503,6 +583,9 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
     :return: a list of times defining the profiles in the format \
        (time_start, time_max_height, time_end)
     """
+
+    if to_return is None:
+        to_return = []
 
     isDone = False
     # Get the starting height from the user

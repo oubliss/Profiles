@@ -207,6 +207,9 @@ class Raw_Profile():
         to_return["roll"] = self.rotation[3]  # These are in radians
         to_return["pitch"] = self.rotation[4]
         to_return["yaw"] = self.rotation[5]
+        to_return["pos_n"] = self.rotation[6]
+        to_return["pos_e"] = self.rotation[6]
+        to_return["pos_d"] = self.rotation[6]
         to_return["alt"] = self.pres[3]
         to_return["pres"] = self.pres[0]
         to_return["time"] = self.rotation[-1]
@@ -614,28 +617,31 @@ class Raw_Profile():
                 rotation_list[i] = np.array(rotation_list[i]) * units.deg
 
         # RPMs
-        num_motors = len(rpm_list) - 1
+        if rpm_list is not None:
+            num_motors = len(rpm_list) - 1
 
-        # Check to make sure there are equal numbers of ESC messages.
-        num_messages = np.unique([len(foo) for foo in rpm_list[0:num_motors]])
+            # Check to make sure there are equal numbers of ESC messages.
+            num_messages = np.unique([len(foo) for foo in rpm_list[0:num_motors]])
 
-        if len(num_messages) > 1:
-            # If the number of messages differ between the 4 motors, need to do some extra stuff
-            # Use the lower value
-            num_messages = np.min(num_messages)
+            if len(num_messages) > 1:
+                # If the number of messages differ between the 4 motors, need to do some extra stuff
+                # Use the lower value
+                num_messages = np.min(num_messages)
 
-            # Truncate the arrays to the lower value
-            for i in range(num_motors):
-                rpm_list[i] = rpm_list[i][:num_messages]
+                # Truncate the arrays to the lower value
+                for i in range(num_motors):
+                    rpm_list[i] = rpm_list[i][:num_messages]
 
-            rpm_list[-1] = rpm_list[-1][:num_messages * num_motors]
+                rpm_list[-1] = rpm_list[-1][:num_messages * num_motors]
 
-        else:
-            num_messages = num_messages[-1]
+            else:
+                num_messages = num_messages[-1]
 
-        # Need to average the times between the motors
-        avg_times = [dt.utcfromtimestamp(np.nanmean(times, axis=0)) for times in np.reshape(rpm_list[-1], (num_messages, num_motors))]
-        rpm_list[-1] = avg_times
+            # Need to average the times between the motors
+            avg_times = [dt.utcfromtimestamp(np.nanmean(times, axis=0)) for times in np.reshape(rpm_list[-1], (num_messages, num_motors))]
+            rpm_list[-1] = avg_times
+
+            self.rpm = tuple(rpm_list)
 
         #
         # Convert to tuple
@@ -648,7 +654,7 @@ class Raw_Profile():
         self.events = tuple(event_list)
         self.messages = tuple(message_list)
         self.wind = tuple(wind_list)
-        self.rpm = tuple(rpm_list)
+
 
         if nc_level == 'low':
             self.apply_thermo_coeffs()
