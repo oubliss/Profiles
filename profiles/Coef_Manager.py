@@ -159,7 +159,7 @@ class CSV_Coef_Manager(Coef_Manager_Base):
         :rtype: dict
         :return: information about the sensor, including offset OR coefs and calibration equation
         """
-        print(serial_number)
+
         try:
             serial_number = int(serial_number)
         except ValueError:
