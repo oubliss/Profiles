@@ -90,11 +90,13 @@ class Profile():
         self._units = self._raw_profile.get_units()
         self._pos = self._raw_profile.pos_data()
         self._pres = (self._raw_profile.pres[0], self._raw_profile.pres[-1])
+        self._wind_data = self._raw_profile.wind_data().copy()
+        self._thermo_data = self._raw_profile.thermo_data().copy()
         self.meta = self._raw_profile.meta
         file_path = self._raw_profile.file_path
 
         if profile_start_height is not None:
-            profile_start_height = profile_start_height
+            profile_start_height = profile_start_height * self._units.m
         try:
             if index_list is None:
                 index_list = \
@@ -193,6 +195,52 @@ class Profile():
         self.lon =  np.array(self.lon) * units.deg
         self.alt_MSL =  np.array(self.alt_MSL) * units.m 
 
+    def lowpass_filter(self, Fs=10., Fc=0.1, n=501):
+        """
+        Based on contributions from Dr. Brian Green (OU SoM)
+
+        Lowpass zero-phase FIR filter the raw data read from JSON files
+        Also filter the thrust vectors here for better speed and direction
+        Finally, apply response time correction convolution to the keys in tau
+        Fs: sampling frequency in Hz
+        Fc: cutoff frequency in Hz
+        n: number of filter coefficients to include
+        """
+        from scipy import signal
+
+        # Make a copy of the data from raw profile. ALWAYS want to filter from the raw data
+        wind_data = self._raw_profile.wind_data().copy()
+        thermo_data = self._raw_profile.thermo_data().copy()
+
+        # Set up my filter
+        F = Fc/Fs
+        fir_coef = signal.remez(n, [0., F/10., F, 0.5], [1, 0])
+        # apply filter to elements
+        N = len(fir_coef)
+        N0 = int((N-1)/2)
+
+        # Determine the wind data we want to filter (manually set here)
+        vars_to_filter = ['roll', 'pitch', 'yaw']
+
+        for var in wind_data.keys():
+            if var not in vars_to_filter:
+                continue
+            print(f"    Filtering {var}")
+
+            # zero pad the signal to the left and right
+            aux = np.pad(wind_data[var].magnitude, N0, mode="constant")
+
+            # Pre-allocate memory
+            filt = np.zeros(len(wind_data[var]), dtype=float)
+
+            # Run filter over input signal
+            i0 = int((N-1)/2 + 1)
+            i1 = len(filt)+1
+            for i in range(i0, i1):
+                filt[i-N0] = np.sum(fir_coef * aux[(i-N0):(i+N0+1)])
+
+            self._wind_data[var] = filt * wind_data[var].units
+
     def get(self, varname):
         """
         Returns the requested variable, which may be in Profile or one of its
@@ -238,7 +286,7 @@ class Profile():
             file_path = self.file_path
 
         if self._wind_profile is None:
-            wind_data = self._raw_profile.wind_data()
+            wind_data = self._wind_data
             self._wind_profile = \
                 Wind_Profile(wind_data, self.resolution,
                              algorithm=algorithm,
@@ -276,7 +324,7 @@ class Profile():
             file_path = self.file_path
 
         if self._thermo_profile is None:
-            thermo_data = self._raw_profile.thermo_data()
+            thermo_data = self._thermo_data
             self._thermo_profile = \
                 Thermo_Profile(thermo_data, self.resolution,
                                gridded_times=self.gridded_times,
