@@ -1,11 +1,12 @@
 import setuptools
+import profiles
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
     name="oucass-profiles",
-    version="1.3.1",
+    version=profiles.__version__,
     author="Jessica Blunt, Tyler Bell, Brian Greene, Gus Azevedo, Ariel Jacobs",
     author_email="cass@ou.edu",
     description="Tools to process atmospheric data collected by UAS along either vertical or horizontal lines",

@@ -8,12 +8,12 @@ from profiles import Meta
 from profiles import Profile, Profile_Set, plotting
 from my_lib.utils import elevation
 
-download_dir = '/Users/tyler.bell/Data/uas/perils/IOP4'
+download_dir = '/Users/tyler.bell/Data/perils/IOP1/'
 if not os.path.exists(download_dir):
     os.makedirs(download_dir)
 
 start = datetime(2022, 4, 13)
-end = datetime(2022, 4, 13, 23)
+end = datetime(2022, 4, 14)
 
 
 # Connect to DLB
@@ -29,7 +29,7 @@ ind = np.where((flight_times >= start) & (flight_times <= end))
 # Download the data locally
 bin_files = []
 for f in flights[ind]:
-    filename = f"{download_dir}/flight{f.raw_data['flight_number']}_{f.flight_time:%Y%m%d_%H%M%S}.BIN"
+    filename = f"{download_dir}/{f.place_name.replace(' ', '')}_flight{f.raw_data['flight_number']}_{f.flight_time:%Y%m%d_%H%M%S}.BIN"
     bin_files.append(filename)
 
     if not os.path.exists(filename):
@@ -65,19 +65,37 @@ for place, place_guid in flight_locations:
             print("Error on " + fn)
             print(traceback.print_exc())
 
-    at = []
+
+    # Newer way
     for p in a.profiles:
         if len(p.gridded_times) > 3:
-            at.append(p.get_thermo_profile())
+            p.lowpass_filter()
+            p.get_thermo_profile()
+            p.get_wind_profile()
 
-    aw = []
-    for p in a.profiles:
-        try:
-            aw.append(p.get_wind_profile())
-        except Exception:
-            import traceback
-            print("Error on " + fn)
-            print(traceback.print_exc())
+            p.save_netcdf()
+
+
+
+    # older way
+    # at = []
+    # for p in a.profiles:
+    #     if len(p.gridded_times) > 3:
+    #         at.append(p.get_thermo_profile())
+    #
+    # aw = []
+    # for p in a.profiles:
+    #     try:
+    #         aw.append(p.get_wind_profile())
+    #     except Exception:
+    #         import traceback
+    #         print("Error on " + fn)
+    #         print(traceback.print_exc())
+    #
+    # a.save_netCDF(download_dir)
+
+
+
 
 
 
