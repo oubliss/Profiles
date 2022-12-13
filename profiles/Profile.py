@@ -195,7 +195,7 @@ class Profile():
         self.lon =  np.array(self.lon) * units.deg
         self.alt_MSL =  np.array(self.alt_MSL) * units.m 
 
-    def lowpass_filter(self, Fs=10., Fc=0.1, n=501):
+    def lowpass_filter(self, wind=True, thermo=True, Fs=10., Fc=0.1, n=501):
         """
         Based on contributions from Dr. Brian Green (OU SoM)
 
@@ -221,25 +221,47 @@ class Profile():
 
         # Determine the wind data we want to filter (manually set here)
         vars_to_filter = ['roll', 'pitch', 'yaw']
+        if wind:
+            for var in wind_data.keys():
+                if var not in vars_to_filter:
+                    continue
+                # print(f"    Filtering {var}")
 
-        for var in wind_data.keys():
-            if var not in vars_to_filter:
-                continue
-            print(f"    Filtering {var}")
+                # zero pad the signal to the left and right
+                aux = np.pad(wind_data[var].magnitude, N0, mode="constant")
 
-            # zero pad the signal to the left and right
-            aux = np.pad(wind_data[var].magnitude, N0, mode="constant")
+                # Pre-allocate memory
+                filt = np.zeros(len(wind_data[var]), dtype=float)
 
-            # Pre-allocate memory
-            filt = np.zeros(len(wind_data[var]), dtype=float)
+                # Run filter over input signal
+                i0 = int((N-1)/2 + 1)
+                i1 = len(filt)+1
+                for i in range(i0, i1):
+                    filt[i-N0] = np.sum(fir_coef * aux[(i-N0):(i+N0+1)])
 
-            # Run filter over input signal
-            i0 = int((N-1)/2 + 1)
-            i1 = len(filt)+1
-            for i in range(i0, i1):
-                filt[i-N0] = np.sum(fir_coef * aux[(i-N0):(i+N0+1)])
+                self._wind_data[var] = filt * wind_data[var].units
 
-            self._wind_data[var] = filt * wind_data[var].units
+        # Determine the wind data we want to filter (manually set here)
+        vars_to_filter = ['temp1', 'temp2', 'temp3', 'temp4',
+                          'rh1', 'rh2', 'rh3', 'rh4']
+        if thermo:
+            for var in thermo_data.keys():
+                if var not in vars_to_filter:
+                    continue
+
+                # zero pad the signal to the left and right
+                aux = np.pad(thermo_data[var].magnitude, N0, mode="edge")
+
+                # Pre-allocate memory
+                filt = np.zeros(len(thermo_data[var]), dtype=float)
+
+                # Run filter over input signal
+                i0 = int((N - 1) / 2 + 1)
+                i1 = len(filt) + 1
+                for i in range(i0, i1):
+                    filt[i - N0] = np.sum(fir_coef * aux[(i - N0):(i + N0 + 1)])
+
+                self._thermo_data[var] = filt * thermo_data[var].units
 
     def get(self, varname):
         """
