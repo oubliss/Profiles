@@ -129,12 +129,12 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
                              (base[indices[1]]).magnitude,
                              new_res.magnitude)
     else:
-        new_base = np.arange(base_start.magnitude,
+        new_base = np.arange((base_start + 0.5*new_res).magnitude,
                              (base[indices[1]] - 0.5 * new_res).magnitude,
                              new_res.magnitude)
         base_edges = np.arange(base_start.magnitude,
-                             (base[indices[1]] - 0.5 * new_res).magnitude,
-                             new_res.magnitude)
+                              base[indices[1]].magnitude,
+                              new_res.magnitude)
 
     new_base = np.array(new_base) * base.units
     base_edges = np.array(base_edges) * base.units
