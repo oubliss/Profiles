@@ -243,7 +243,8 @@ class Profile():
 
         # Determine the wind data we want to filter (manually set here)
         vars_to_filter = ['temp1', 'temp2', 'temp3', 'temp4',
-                          'rh1', 'rh2', 'rh3', 'rh4']
+                  'rh1', 'rh2', 'rh3', 'rh4',
+                  'resi1', 'resi2', 'resi3', 'resi4']
         if thermo:
             for var in thermo_data.keys():
                 if var not in vars_to_filter:
