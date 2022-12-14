@@ -107,6 +107,8 @@ class Profile_Set():
                                       metadata=metadata)
 
         pos = raw_profile_set.pos_data()
+        # print(pos['alt_MSL'])
+
 
         # Identify the start, peak, and end indices of each profile
         index_list = utils.identify_profile(pos["alt_MSL"],
@@ -472,6 +474,20 @@ class Profile_Set():
                     pres_var.units = str(thermo.pres.units)
                 except Exception:
                     continue
+                #LAT
+                try:
+                    lat_var = profile_group.createVariable("lat", "f8", ("time",))
+                    lat_var[:] = thermo.lat.magnitude
+                    lat_var.units = str(thermo.lat.units)
+                except Exception:
+                    continue
+                # LON
+                try:
+                    lon_var = profile_group.createVariable("lon", "f8", ("time",))
+                    lon_var[:] = thermo.lon.magnitude
+                    lon_var.units = str(thermo.lon.units)
+                except Exception:
+                    continue
 
             #
             # Wind
@@ -537,6 +553,21 @@ class Profile_Set():
                                                            ("time",))
                     alt_var[:] = wind.alt.magnitude
                     alt_var.units = str(wind.alt.units)
+                except Exception:
+                    continue
+                #LAT
+                try:
+                    lat_var = profile_group.createVariable("lat", "f8", ("time",))
+                    lat_var[:] = wind.lat.magnitude
+                    lat_var.units = str(wind.lat.units)
+                except Exception:
+                    continue
+                # LON
+                try:
+                    lon_var = profile_group.createVariable("lon", "f8", ("time",))
+                    lon_var[:] = wind.lon.magnitude
+                    print(lon_var)
+                    lon_var.units = str(wind.lon.units)
                 except Exception:
                     continue
 
