@@ -199,22 +199,35 @@ def regrid_data(data=None, data_times=None, gridded_times=None, units=None):
         data_seg_start_ind = None
         data_seg_end_ind = None
 
-        while data_index < len(data):
-            if data_times[data_index] >= start_time:
-                data_seg_start_ind = data_index
-                break
-            data_index += 1
+        try:
+            foo = np.where((np.array(data_times) > start_time) & (np.array(data_times) <= end_time))
+            gridded_data.append(np.nanmean(data.magnitude[foo]))
+        except IndexError:
+            print("Something is really wrong. The data time array should be the same length as the data itself")
+            sys.exit()
 
-        while data_index < len(data):
-            if data_times[data_index] >= end_time:
-                data_seg_end_ind = data_index
-                break
-            data_index += 1
+        # while data_index < len(data):
+        #     if data_times[data_index] >= start_time:
+        #         data_seg_start_ind = data_index
+        #         break
+        #     data_index += 1
+        #
+        # while data_index < len(data):
+        #     if data_index == len(data_times):
+        #         data_seg_end_ind = data_index
+        #         break
+        #
+        #     if data_times[data_index] >= end_time:
+        #         data_seg_end_ind = data_index
+        #         break
+        #     data_index += 1
 
         # Calculate and store the segment mean
-        if data_seg_start_ind is not None and data_seg_end_ind is not None:
-            gridded_data.append(np.nanmean(data.magnitude[data_seg_start_ind:
-                                           data_seg_end_ind]))
+        # if data_seg_start_ind is not None and data_seg_end_ind is not None:
+        #     gridded_data.append(np.nanmean(data.magnitude[data_seg_start_ind:
+        #                                    data_seg_end_ind]))
+
+
 
     gridded_data = np.array(gridded_data) * data.units
 

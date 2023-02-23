@@ -76,7 +76,9 @@ class Wind_Profile():
             self._units = units
             self._datadir = os.path.dirname(file_path + ".json")
 
-        
+        # Extract the proper time arrays
+        time_pres = wind_dict['time_pres']
+
         # If no indices given, use entire file
         if not indices[0] is None:
             # trim profile
@@ -122,13 +124,14 @@ class Wind_Profile():
         if (self.resolution.dimensionality ==
                 self._units.get_dimensionality('m')):
             self.alt = gridded_base
-            self.pres = utils.regrid_data(data=self.pres, data_times=time,
+
+            self.pres = utils.regrid_data(data=self.pres, data_times=time_pres,
                                           gridded_times=self.gridded_times,
                                           units=self._units)
         elif (self.resolution.dimensionality ==
               self._units.get_dimensionality('Pa')):
             self.pres = gridded_base
-            self.alt = utils.regrid_data(data=self.alt, data_times=time,
+            self.alt = utils.regrid_data(data=self.alt, data_times=time_pres,
                                          gridded_times=self.gridded_times,
                                          units=self._units)
 

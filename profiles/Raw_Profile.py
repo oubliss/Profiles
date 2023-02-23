@@ -210,9 +210,12 @@ class Raw_Profile():
         to_return["pos_n"] = self.rotation[6]
         to_return["pos_e"] = self.rotation[6]
         to_return["pos_d"] = self.rotation[6]
+        to_return["time"] = self.rotation[-1]
+
         to_return["alt"] = self.pres[3]
         to_return["pres"] = self.pres[0]
-        to_return["time"] = self.rotation[-1]
+        to_return['time_pres'] = self.pres[-1]
+
 
         to_return["serial_numbers"] = self.serial_numbers
 
