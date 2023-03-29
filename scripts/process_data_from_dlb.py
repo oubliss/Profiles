@@ -6,7 +6,6 @@ import dronelogbook as dlb
 import profiles
 from profiles import Meta
 from profiles import Profile, Profile_Set, plotting
-from my_lib.utils import elevation
 
 download_dir = '/Users/tyler.bell/Data/perils/IOP1/'
 if not os.path.exists(download_dir):
