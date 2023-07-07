@@ -65,6 +65,8 @@ class Raw_Profile():
         self.file_path = file_path
         self.calib_temp = None
         self.calib_rh = None
+        self.calib_speed = None
+        self.calib_dir = None
 
         # Set dummy serial numbers - these will allow the file 
         # to be processed even if the JSON and checklist files 
@@ -137,6 +139,55 @@ class Raw_Profile():
 
         self.calib_temp = temp_raw
         self.calib_rh = rh_raw
+
+    def apply_wind_coeffs(self):
+
+        wind_data = self.wind_data()
+
+        tail_num = utils.coef_manager.get_tail_n(wind_data['serial_numbers']['copterID'])
+
+        # psi and az represent the copter's direction in spherical coordinates
+        psi = np.zeros(len(wind_data["roll"])) * units.rad
+        az = np.zeros(len(wind_data["roll"])) * units.rad
+
+        for i in range(len(wind_data["roll"])):
+            # croll is cos(roll), sroll is sin(roll)...
+            croll = np.cos(wind_data["roll"][i]).magnitude
+            sroll = np.sin(wind_data["roll"][i]).magnitude
+            cpitch = np.cos(wind_data["pitch"][i]).magnitude
+            spitch = np.sin(wind_data["pitch"][i]).magnitude
+            cyaw = np.cos(wind_data["yaw"][i]).magnitude
+            syaw = np.sin(wind_data["yaw"][i]).magnitude
+
+            Rx = np.matrix([[1, 0, 0],
+                            [0, croll, sroll],
+                            [0, -sroll, croll]])
+            Ry = np.matrix([[cpitch, 0, -spitch],
+                            [0, 1, 0],
+                            [spitch, 0, cpitch]])
+            Rz = np.matrix([[cyaw, -syaw, 0],
+                            [syaw, cyaw, 0],
+                            [0, 0, 1]])
+            R = Rz * Ry * Rx
+
+            psi[i] = np.arccos(R[2, 2])
+            az[i] = np.arctan2(R[1, 2], R[0, 2])
+
+        coefs = utils.coef_manager.get_coefs('Wind', tail_num, 'E1')
+        speed = float(coefs['A']) * np.sqrt(np.tan(psi)).magnitude + float(coefs['B'])
+
+        speed = speed * units.m / units.s
+        # Throw out negative speeds
+        speed[speed.magnitude < 0.] = np.nan
+
+        # Fix negative angles
+        az = az.to(units.deg)
+        iNeg = np.squeeze(np.where(az.magnitude < 0.))
+        az[iNeg] = az[iNeg] + 360. * units.deg
+
+        # az is the wind direction, speed is the wind speed
+        self.calib_speed = speed
+        self.calib_dir = az
 
     def pos_data(self):
         """ Gets data needed by the Profile constructor.
@@ -654,13 +705,24 @@ class Raw_Profile():
         self.pos = tuple(pos_list)
         self.pres = tuple(pres_list)
         self.rotation = tuple(rotation_list)
-        self.events = tuple(event_list)
         self.messages = tuple(message_list)
-        self.wind = tuple(wind_list)
+
+        # Keeps compatability with pre Aug 2021 files
+        if event_list is not None:
+            self.events = tuple(event_list)
+        else:
+            self.events = None
+
+        # Keep compatability with files not containing these data
+        if wind_list is not None:
+            self.wind = tuple(wind_list)
+        else:
+            self.events = None
 
 
         if nc_level == 'low':
             self.apply_thermo_coeffs()
+            self.apply_wind_coeffs()
             self._save_netCDF(file_path)
 
     def _read_netCDF(self, file_path):
@@ -882,7 +944,7 @@ class Raw_Profile():
             file_name = file_path
 
         elif self.meta is not None:
-            file_name = str(self.meta.get("location")) + \
+            file_name = str(self.meta.get("location")).replace(' ', '') + \
                         str(self.meta.get("platform_id")) + "CMT" + \
                         ".a0." + self.meta.get("timestamp").replace("_", ".") + ".cdf"
             file_name = os.path.join(os.path.dirname(file_path), file_name)
@@ -905,18 +967,19 @@ class Raw_Profile():
             sn_grp.setncattr("imet" + str(i+1), self.serial_numbers['imet' + str(i+1)])
 
         # EVENTS
-        events_grp = main_file.createGroup("/events")
-        events_grp.createDimension("event_time", None)
-        new_var = events_grp.createVariable("time", "f8", ("event_time",))
-        new_var[:] = netCDF4.date2num(self.events[-1],
-                                      units="microseconds since \
-                                      2010-01-01 00:00:00:00")
-        new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+        if self.events is not None:  # This maintains compatability for files pre August 2021
+            events_grp = main_file.createGroup("/events")
+            events_grp.createDimension("event_time", None)
+            new_var = events_grp.createVariable("time", "f8", ("event_time",))
+            new_var[:] = netCDF4.date2num(self.events[-1],
+                                          units="microseconds since \
+                                          2010-01-01 00:00:00:00")
+            new_var.units = "microseconds since 2010-01-01 00:00:00:00"
 
-        new_var = events_grp.createVariable("events", "f8", ("event_time",))
-        new_var[:] = self.events[0]
-        new_var.comment1 = "Event IDs last updated Aug 2021"
-        new_var.units = event_IDs
+            new_var = events_grp.createVariable("events", "f8", ("event_time",))
+            new_var[:] = self.events[0]
+            new_var.comment1 = "Event IDs last updated Aug 2021"
+            new_var.units = event_IDs
 
         # MESSAGES
         message_grp = main_file.createGroup("/messages")
@@ -1101,11 +1164,29 @@ class Raw_Profile():
             r33_var[:] = self.wind[4]
 
             time_var.units = "microseconds since 2010-01-01 00:00:00:00"
-            wdir_var.units = "deg"
+            wdir_var.units = "degrees"
             wspd_var.units = "m/s"
             r13_var.units = "None"
             r23_var.units = "None"
             r33_var.units = "None"
+
+        if self.calib_speed is not None:
+            wind_grp = main_file.createGroup("/calib_wind")
+            wind_grp.createDimension('wind_time', None)
+
+            time = wind_grp.createVariable("calib_time", 'i8', ('wind_time',))
+            calib_wspd_var = wind_grp.createVariable("calib_wspd", 'f8', ('wind_time',))
+            calib_wdir_var = wind_grp.createVariable("calib_wdir", 'f8', ('wind_time',))
+
+            time[:] = netCDF4.date2num(self.rotation[-1], units="microseconds \
+                                               since 2010-01-01 00:00:00:00")
+            calib_wspd_var[:] = self.calib_speed.magnitude
+            calib_wdir_var[:] = self.calib_dir.magnitude
+
+            time.units = "microseconds since 2010-01-01 00:00:00:00"
+            calib_wspd_var.units = 'm/s'
+            calib_wspd_var.comment = "NOTE: These values are only valid for ascending portions of the profile"
+            calib_wdir_var.units = 'degrees'
 
         # RPM
         if self.rpm is not None:
