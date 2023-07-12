@@ -12,6 +12,7 @@ from datetime import timedelta
 from pandas.plotting import register_matplotlib_converters
 from pint import UnitStrippedWarning
 from metpy.units import units as u
+from scipy.signal import find_peaks
 
 from .Coef_Manager import Coef_Manager
 
@@ -570,6 +571,68 @@ def _s_dev(data, max_abs_error):
                 return to_return
 
 
+def identify_profile_peaks(alts, window=None, use_window=False,
+                           confirm_bounds=False, **kwargs):
+
+    """
+    New method for identifying the flight legs. Window will be the window to consider using
+    the ducted fan flag (can be indices or times).
+
+    Use scipy.signal.find_peaks with prominance set to 1. Can make this a kwarg.
+
+    To find valleys, multiply alts by -1
+
+    Also have the option to use the old profile_start_height method for if the fan flag isn't in the file
+
+    :param alts:
+    :param alt_times:
+    :param window:
+    :return:
+    """
+
+    to_return = []
+
+    # Run find peaks on the altitudes to find the peaks and valleys
+    peaks, foo = find_peaks(alts, prominence=1, **kwargs)
+    valleys, foo = find_peaks(-1*alts, prominence=1, **kwargs)
+
+    # Concat these arrays and sort. If use_window is True, use the widow as start and end points
+    if use_window is True:
+        p_and_v = np.sort(np.concatenate((window, peaks, valleys)))
+    else:
+        p_and_v = np.sort(np.concatenate((peaks, valleys)))
+
+    # Remove any indices outside of the specified window, if provided
+    if window is not None:
+        foo = np.where((p_and_v >= window[0]) & (p_and_v <= window[1]))
+        p_and_v = p_and_v[foo]
+
+
+    # Check the bounds if desired
+    # if confirm_bounds:
+    #     # User verifies selection
+    #     fig2 = plt.figure()
+    #     plt.plot(alts, figure=fig2)
+    #     plt.grid(axis="y", which="both", figure=fig2)
+    #     plt.vlines(p_and_v,
+    #                min(alts).magnitude - 50, max(alts.magnitude) + 50)
+    #
+    #     plt.show(block=True)
+
+    # Function to format the profiles into the expected data structure for Profiles
+    def _format_profiles(start, inds):
+        try:
+            foo = (inds[start], inds[start+1], inds[start+2])
+            result = _format_profiles(start+2, inds)
+            print(start)
+            return [foo] + result
+        except IndexError:
+            print('foo')
+            return []
+
+    return _format_profiles(0, p_and_v)
+
+
 def identify_profile(alts, alt_times, confirm_bounds=True,
                      profile_start_height=None, to_return=None, ind=0):
     """ Identifies the temporal bounds of all profiles in the data file. These
@@ -626,7 +689,7 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
 
     # Declare variables used in loop
     start_ind_asc = None
-    end_ind_des = None
+    end_ind_des = len(alts) - 12
     peak_ind = None
 
     # Check through valid alts for start_ind_asc, peak_ind, end_ind_des in
@@ -638,8 +701,7 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
                 # Error if starts on a descent
                 if(alts[ind] > profile_start_height and
                    alts[ind + 10] < alts[ind]):
-                    print("Error separating profiles: start height is first \
-                          reached on a descent")
+                    print("Error separating profiles: start height is first reached on a descent")
                     break
 
                 # Set start_ind_asc when the craft is first above
@@ -649,7 +711,9 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
 
                 ind += 1
 
-            elif(end_ind_des is None):  # should be descending
+            elif(end_ind_des == len(alts) - 12):  # should be descending
+                if end_ind_des == ind:
+                    end_ind_des += 1
 
                 # Set end_ind_des when the craft is again below
                 # profile_start_height for the first time since start_ind_asc
@@ -666,6 +730,9 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
             # The current profile has been processed; we just need to check
             # if there are more profiles in the file
             else:
+                if peak_ind is None:
+                    peak_ind = list(alts).index(np.nanmax(alts[start_ind_asc:end_ind_des]),
+                                                start_ind_asc, end_ind_des)
                 if confirm_bounds:
                     # User verifies selection
                     fig2 = plt.figure()
