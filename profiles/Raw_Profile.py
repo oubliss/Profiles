@@ -374,19 +374,21 @@ class Raw_Profile():
 
                     # Create array of lists with two lists per temperature
                     # sensor reported in the data file - one for temperature
-                    # and one for resistance - plus one for times
-                    temp_list = [[] for x in
-                                 range(9)]
+                    # and one for resistance - plus one for times and one for
+                    # the scoop fan flag
+                    temp_list = [[] for x in range(10)]
                     sensor_names["IMET"] = {}
                     # Determine field names
-                    sensor_numbers = np.add(range(int((len(temp_list)-2) / 2)),
-                                            1)
+                    sensor_numbers = np.add(range(int((len(temp_list)-2) / 2)), 1)
+
                     for num in sensor_numbers:
                         sensor_names["IMET"]["T"+str(num)] = 2*num - 2
                         sensor_names["IMET"]["R"+str(num)] = 2*num - 1
+                    sensor_names["IMET"]["Fan"] = -2
                     sensor_names["IMET"]["Time"] = -1
 
-                # Read fields into temp_list, including Time
+
+                # Read fields into temp_list, including Time and fan flag
                 for key, value in sensor_names["IMET"].items():
                     try:
                         if 'Time' in key:
@@ -783,6 +785,8 @@ class Raw_Profile():
                 i += 1
             except KeyError:
                 break
+
+        temp_list.append(main_file["temp"].variables["fan_flag"][:])
         temp_list.append(netCDF4.num2date(main_file["temp"].
                                           variables["time"][:],
                                           units="microseconds since \
@@ -1013,6 +1017,13 @@ class Raw_Profile():
                                       units="microseconds since \
                                       2010-01-01 00:00:00:00")
         new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+
+        # Scoop fan flag
+        new_var = temp_grp.createVariable("fan_flag", "f8", ("temp_time",))
+        new_var[:] = self.temp[-2]
+        new_var.units = "unitless"
+        new_var.comment1 = "0 -> Scoop fan off (no active sensor aspiration)"
+        new_var.comment2 = "1 -> Scoop fan on (active sensor aspiration)"
 
         if self.calib_temp is not None:
             for num in temp_sensor_numbers:
