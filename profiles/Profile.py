@@ -213,8 +213,11 @@ class Profile():
         thermo_data = self._raw_profile.thermo_data().copy()
 
         # Set up my filter
-        F = Fc/Fs
-        fir_coef = signal.remez(n, [0., F/10., F, 0.5], [1, 0])
+        # F = Fc/Fs  # Don't need this since I'm keeping things in physical units
+        fir_coef = signal.remez(n,                       # Number of coeffs
+                                [0., Fc/10, Fc, 0.5*Fs], # Bands to specify
+                                [1, 0],                  # Desired gain of the bands
+                                fs=Fs)                   # Sampling Frequency
         # apply filter to elements
         N = len(fir_coef)
         N0 = int((N-1)/2)
@@ -227,19 +230,21 @@ class Profile():
                     continue
                 # print(f"    Filtering {var}")
 
-                # zero pad the signal to the left and right
-                aux = np.pad(wind_data[var].magnitude, N0, mode="constant")
+                # # zero pad the signal to the left and right
+                # aux = np.pad(wind_data[var].magnitude, N0, mode="constant")
+                #
+                # # Pre-allocate memory
+                # filt1 = np.zeros(len(wind_data[var]), dtype=float)
+                #
+                # # Run filter over input signal
+                # i0 = int((N-1)/2 + 1)
+                # i1 = len(filt1)+1
+                # for i in range(i0, i1):
+                #     filt1[i-N0] = np.sum(fir_coef * aux[(i-N0):(i+N0+1)])
 
-                # Pre-allocate memory
-                filt = np.zeros(len(wind_data[var]), dtype=float)
+                filt2 = signal.filtfilt(fir_coef, 1, wind_data[var].magnitude, padlen=N0, padtype="constant")
 
-                # Run filter over input signal
-                i0 = int((N-1)/2 + 1)
-                i1 = len(filt)+1
-                for i in range(i0, i1):
-                    filt[i-N0] = np.sum(fir_coef * aux[(i-N0):(i+N0+1)])
-
-                self._wind_data[var] = filt * wind_data[var].units
+                self._wind_data[var] = filt2 * wind_data[var].units
 
         # Determine the wind data we want to filter (manually set here)
         vars_to_filter = ['temp1', 'temp2', 'temp3', 'temp4',
@@ -251,18 +256,19 @@ class Profile():
                     continue
 
                 # zero pad the signal to the left and right
-                aux = np.pad(thermo_data[var].magnitude, N0, mode="edge")
+                # aux = np.pad(thermo_data[var].magnitude, N0, mode="edge")
+                #
+                # # Pre-allocate memory
+                # filt1 = np.zeros(len(thermo_data[var]), dtype=float)
+                #
+                # # Run filter over input signal
+                # i0 = int((N - 1) / 2 + 1)
+                # i1 = len(filt1) + 1
+                # for i in range(i0, i1):
+                #     filt1[i - N0] = np.sum(fir_coef * aux[(i - N0):(i + N0 + 1)])
 
-                # Pre-allocate memory
-                filt = np.zeros(len(thermo_data[var]), dtype=float)
-
-                # Run filter over input signal
-                i0 = int((N - 1) / 2 + 1)
-                i1 = len(filt) + 1
-                for i in range(i0, i1):
-                    filt[i - N0] = np.sum(fir_coef * aux[(i - N0):(i + N0 + 1)])
-
-                self._thermo_data[var] = filt * thermo_data[var].units
+                filt2 = signal.filtfilt(fir_coef, 1, thermo_data[var].magnitude, padlen=N0, padtype="constant")
+                self._thermo_data[var] = filt2 * thermo_data[var].units
 
     def get(self, varname):
         """
@@ -383,7 +389,7 @@ class Profile():
         elif self.meta is not None:
             file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
                         str(self.meta.get("platform_id")) + "CMT"  + self._ascent_filename_tag + ".c1." + \
-                        self.meta.get("timestamp").replace("_", ".") + ".cdf"
+                        self.time[0].strftime("%Y%m%d.%H%M%S") + ".cdf"
             file_name = os.path.join(os.path.dirname(file_path), file_name)
 
         else:
@@ -400,7 +406,12 @@ class Profile():
         main_file.setncattr("processing_version", profiles.__version__)
         main_file.setncattr("copter_id", self.copter_id)
         main_file.setncattr("tail_number", self.tail_number)
-        main_file.setncattr("flight_location", utils.get_place_from_lat_lon(self.lat[0].magnitude, self.lon[0].magnitude))
+        
+        try:
+            main_file.setncattr("flight_location", utils.get_place_from_lat_lon(self.lat[0].magnitude, self.lon[0].magnitude))
+        except Exception:
+            pass 
+        
         main_file.setncattr('datafile_created_on_date', datetime.utcnow().isoformat())
         main_file.setncattr('datafile_created_on_machine',  os.uname().nodename)
 
