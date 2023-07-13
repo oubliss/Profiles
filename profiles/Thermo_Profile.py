@@ -184,11 +184,11 @@ class Thermo_Profile():
         temp_ind = 0  # track index in temp_raw  after items are removed.
         for flags_ind in range(len(self.temp_flags)):
             if self.temp_flags[flags_ind] != 0:
-                print("Temperature sensor", temp_ind + 1, "removed")
-                temp_raw[temp_ind] = \
-                    [np.nan]*len(temp_raw[temp_ind])
-            else:
-                temp_ind += 1
+
+                if self.temp_flags[flags_ind] != 4:  # if this isn't the missing data flag...
+                    print("Temperature sensor", flags_ind + 1, "removed")
+
+                temp_raw[flags_ind] = np.full(len(temp_raw[flags_ind]), np.nan)
 
         # Average the sensors
         for i in range(len(temp_raw[0])):
