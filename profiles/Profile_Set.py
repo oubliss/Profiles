@@ -107,15 +107,25 @@ class Profile_Set():
                                       metadata=metadata)
 
         pos = raw_profile_set.pos_data()
-        # print(pos['alt_MSL'])
 
+        # Find the window where the scoop fan was active
+        foo = np.where(np.array(raw_profile_set.thermo_data()['fan_flag']) > 0)[0]
+        fan_start_time = raw_profile_set.thermo_data()['time_temp'][foo.min()]
+        fan_stop_time = raw_profile_set.thermo_data()['time_temp'][foo.max()]
+
+        # Add 5 secs to the start time so the sensor reach their equilibrium
+        fan_stop_time += dt.timedelta(seconds=5)
+
+        index_list = utils.identify_profile_peaks(pos["alt_MSL"].magnitude, pos['time'],
+                                                  window=(fan_start_time, fan_stop_time), use_window=True,
+                                                  confirm_bounds=self.confirm_bounds)
 
         # Identify the start, peak, and end indices of each profile
-        index_list = utils.identify_profile(pos["alt_MSL"],
-                                            pos["time"], self.confirm_bounds,
-                                            to_return=[],
-                                            profile_start_height=self
-                                            .profile_start_height)
+        # index_list = utils.identify_profile(pos["alt_MSL"],
+        #                                     pos["time"], self.confirm_bounds,
+        #                                     to_return=[],
+        #                                     profile_start_height=self
+        #                                     .profile_start_height)
 
         # Create a Profile object for each profile identified
         for profile_num in np.add(range(len(index_list)), 1):

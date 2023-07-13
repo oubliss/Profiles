@@ -571,63 +571,56 @@ def _s_dev(data, max_abs_error):
                 return to_return
 
 
-def identify_profile_peaks(alts, window=None, use_window=False,
+def identify_profile_peaks(alts, alt_times, window=None,
                            confirm_bounds=False, **kwargs):
-
     """
-    New method for identifying the flight legs. Window will be the window to consider using
-    the ducted fan flag (can be indices or times).
+    New method for identifying the individual flight legs of a CopterSonde flight without prior knowledge
+    of the surface altitude. This uses scipy.signal.find_peaks and defaults to a prominence of 1 as an input.
+    Other inputs to find_peaks are available via the kwargs.
 
-    Use scipy.signal.find_peaks with prominance set to 1. Can make this a kwarg.
-
-    To find valleys, multiply alts by -1
-
-    Also have the option to use the old profile_start_height method for if the fan flag isn't in the file
-
-    :param alts:
-    :param alt_times:
-    :param window:
-    :return:
+    :param np.Array<float> alts: Altitude of the UAS
+    :param np.Array<datetime> alt_times: UTC time at each altitude
+    :param tuple<datetime> window: Tuple of two times that should be considered the min max of the data to be considered
+    :param bool confirm_bounds: Make a quick figure that shows the identified peaks and valleys as a sanity check
+    :param kwargs: Kwargs for scipy.signal.find_peaks
+    :return: List of tuples with the start, peak, and end time of each identified profile
     """
-
-    to_return = []
 
     # Run find peaks on the altitudes to find the peaks and valleys
     peaks, foo = find_peaks(alts, prominence=1, **kwargs)
     valleys, foo = find_peaks(-1*alts, prominence=1, **kwargs)
 
-    # Concat these arrays and sort. If use_window is True, use the widow as start and end points
-    if use_window is True:
-        p_and_v = np.sort(np.concatenate((window, peaks, valleys)))
-    else:
-        p_and_v = np.sort(np.concatenate((peaks, valleys)))
-
-    # Remove any indices outside of the specified window, if provided
     if window is not None:
+        # Convert the window from times to indices to make things easy later on
+        window_min = np.argmin(np.abs(window[0] - np.array(alt_times)))
+        window_max = np.argmin(np.abs(window[1] - np.array(alt_times)))
+        window = (window_min, window_max)
+
+        # Concat these arrays and sort.
+        p_and_v = np.sort(np.concatenate((window, peaks, valleys)))
+
+        # Remove any indices outside of the specified window, if provide
         foo = np.where((p_and_v >= window[0]) & (p_and_v <= window[1]))
         p_and_v = p_and_v[foo]
 
 
     # Check the bounds if desired
-    # if confirm_bounds:
-    #     # User verifies selection
-    #     fig2 = plt.figure()
-    #     plt.plot(alts, figure=fig2)
-    #     plt.grid(axis="y", which="both", figure=fig2)
-    #     plt.vlines(p_and_v,
-    #                min(alts).magnitude - 50, max(alts.magnitude) + 50)
-    #
-    #     plt.show(block=True)
+    if confirm_bounds:
+        # User verifies selection
+        fig2 = plt.figure()
+        plt.plot(alts, figure=fig2)
+        plt.grid(axis="y", which="both", figure=fig2)
+        plt.vlines(p_and_v, min(alts) - 10, max(alts) + 10)
+
+        plt.show(block=True)
 
     # Function to format the profiles into the expected data structure for Profiles
     def _format_profiles(start, inds):
         try:
-            foo = (inds[start], inds[start+1], inds[start+2])
+            foo = (alt_times[inds[start]], alt_times[inds[start+1]], alt_times[inds[start+2]])
             result = _format_profiles(start+2, inds)
-            print(start)
             return [foo] + result
         except IndexError:
-            print('foo')
             return []
 
     return _format_profiles(0, p_and_v)

@@ -225,6 +225,7 @@ class Raw_Profile():
             to_return["resi" + str(sensor_number)] \
                 = self.temp[sensor_number*2 - 1]
 
+        to_return["fan_flag"] = self.temp[-2]
         to_return["time_temp"] = np.array(self.temp[-1])
 
         for sensor_number in [a + 1 for a in range((len(self.rh)-1) // 2)]:

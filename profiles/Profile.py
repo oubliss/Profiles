@@ -99,11 +99,18 @@ class Profile():
             profile_start_height = profile_start_height * self._units.m
         try:
             if index_list is None:
-                index_list = \
-                 utils.identify_profile(self._pos["alt_MSL"],
-                                        self._pos["time"], confirm_bounds,
-                                        profile_start_height=\
-                                        profile_start_height)
+                # index_list = utils.identify_profile(self._pos["alt_MSL"],
+                #                                     self._pos["time"], confirm_bounds,
+                #                                     profile_start_height=profile_start_height)
+
+                # Find the window where the scoop fan was active
+                foo = np.where(np.array(self._thermo_data['fan_flag']) > 0)[0]
+                fan_start = self._thermo_data['time_temp'][foo.min()]
+                fan_stop = self._thermo_data['time_temp'][foo.max()]
+
+                index_list = utils.identify_profile_peaks(self._pos["alt_MSL"].magnitude, self._pos['time'],
+                                                          window=(fan_start, fan_stop), use_window=True)
+
             indices = index_list[profile_num - 1]
         except IndexError:
             print("Analysis shows that the given file has fewer than " +
