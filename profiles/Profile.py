@@ -109,7 +109,7 @@ class Profile():
                 fan_stop = self._thermo_data['time_temp'][foo.max()]
 
                 index_list = utils.identify_profile_peaks(self._pos["alt_MSL"].magnitude, self._pos['time'],
-                                                          window=(fan_start, fan_stop), use_window=True)
+                                                          window=(fan_start, fan_stop))
 
             indices = index_list[profile_num - 1]
         except IndexError:

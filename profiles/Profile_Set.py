@@ -117,7 +117,7 @@ class Profile_Set():
         fan_stop_time += dt.timedelta(seconds=5)
 
         index_list = utils.identify_profile_peaks(pos["alt_MSL"].magnitude, pos['time'],
-                                                  window=(fan_start_time, fan_stop_time), use_window=True,
+                                                  window=(fan_start_time, fan_stop_time),
                                                   confirm_bounds=self.confirm_bounds)
 
         # Identify the start, peak, and end indices of each profile
