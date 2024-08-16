@@ -33,7 +33,7 @@ class Thermo_Profile():
 
     def _init2(self, temp_dict, resolution, file_path=None,
                gridded_times=None, gridded_base=None, indices=(None, None),
-               ascent=True, units=None, pos=None, meta=None, nc_level='low'):
+               ascent=True, units=None, pos=None, meta=None, nc_level=None):
         """ Creates Thermo_Profile object from raw data at the specified
         resolution.
 
@@ -185,8 +185,8 @@ class Thermo_Profile():
         for flags_ind in range(len(self.temp_flags)):
             if self.temp_flags[flags_ind] != 0:
 
-                if self.temp_flags[flags_ind] != 4:  # if this isn't the missing data flag...
-                    print("Temperature sensor", flags_ind + 1, "removed")
+                # if self.temp_flags[flags_ind] != 4:  # if this isn't the missing data flag...
+                #     print("Temperature sensor", flags_ind + 1, "removed")
 
                 temp_raw[flags_ind] = np.full(len(temp_raw[flags_ind]), np.nan)
 
@@ -264,7 +264,7 @@ class Thermo_Profile():
         self.q = calc.specific_humidity_from_mixing_ratio(self.mixing_ratio) * \
                  units.gPerKg
 
-        if nc_level in 'low':
+        if nc_level is not None:
             self._save_netCDF(file_path)
 
     def truncate_to(self, new_len):

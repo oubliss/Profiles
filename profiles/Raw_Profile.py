@@ -4,6 +4,7 @@ Reads data file (JSON or netCDF) and stores the raw data
 import json
 import netCDF4
 import numpy as np
+import pandas as pd
 from datetime import datetime as dt
 from metpy.units import units  # this is a pint UnitRegistry
 import profiles.mavlogdump_Profiles as mavlogdump_Profiles
@@ -33,14 +34,13 @@ class Raw_Profile():
     :var Meta meta: processes metadata
     """
 
-    def __init__(self, file_path, dev=False, nc_level='low', metadata=None):
+    def __init__(self, file_path, dev=False, nc_level='low', metadata=None, tail_number=None):
         """ Creates a Raw_Profile object and reads in data in the appropriate
         format. *If meta_path_flight or meta_path_header includes scoop_id,
         the scoop_id constructor parameter will be overwritten*
 
         :param string file_path: file name
         :param bool dev: True if the flight was developmental, false otherwise
-        :param char scoop_id: The set of sensors flown
         :param str nc_level: either 'low', or 'none'. This parameter \
            is used when processing non-NetCDF files to determine which types \
            of NetCDF files will be generated. For individual files for each \
@@ -59,6 +59,7 @@ class Raw_Profile():
         self.rotation = None
         self.wind = None
         self.rpm = None
+        self.imu = None
         self.dev = dev
         self.baro = "BARO"
         self.serial_numbers = {}
@@ -67,6 +68,8 @@ class Raw_Profile():
         self.calib_rh = None
         self.calib_speed = None
         self.calib_dir = None
+        self.file_type = None
+        self.tail_number = tail_number
 
         # Set dummy serial numbers - these will allow the file 
         # to be processed even if the JSON and checklist files 
@@ -81,17 +84,24 @@ class Raw_Profile():
         self.serial_numbers["wind"] = 0
 
         if "json" in file_path or "JSON" in file_path:
-            if os.path.basename(file_path)[:-5] + ".nc" in \
-               os.listdir(os.path.dirname(file_path)):
-                self._read_netCDF(file_path[:-5] + ".nc")
-            else:
-                self._read_JSON(file_path, nc_level=nc_level)
+            # if os.path.basename(file_path)[:-5] + ".nc" in \
+            #    os.listdir(os.path.dirname(file_path)):
+            #     self._read_netCDF(file_path[:-5] + ".nc")
+            # else:
+            #     self._read_JSON(file_path, nc_level=nc_level)
+            self.file_type = 'json'
+            self._read_JSON(file_path, nc_level=nc_level)
+        elif "csv" in file_path:
+            self.file_type = 'csv'
+            self._read_csv(file_path)
         elif ".nc" in file_path or ".NC" in file_path or ".cdf" in file_path:
+            self.file_type = 'nc'
             self._read_netCDF(file_path)
         elif ".bin" in file_path or ".BIN" in file_path:
             self.file_path = mavlogdump_Profiles.with_args(fmt="json",
                                                       file_name=file_path)
             self._read_JSON(self.file_path, nc_level=nc_level)
+            self.file_type = 'json'
 
         if self.meta is not None:
             scoop_id = self.meta.get("scoop_id")
@@ -144,7 +154,16 @@ class Raw_Profile():
 
         wind_data = self.wind_data()
 
-        tail_num = utils.coef_manager.get_tail_n(wind_data['serial_numbers']['copterID'])
+        try:
+            if self.tail_number is None:
+                tail_num = utils.coef_manager.get_tail_n(wind_data['serial_numbers']['copterID'])
+            else:
+                tail_num = self.tail_number
+
+        except KeyError:
+            print("No CopterID found. Please specify a tail number upon Raw_Profile creation to calc winds (needed for CSV reads)")
+            return
+
 
         # psi and az represent the copter's direction in spherical coordinates
         psi = np.zeros(len(wind_data["roll"])) * units.rad
@@ -273,6 +292,278 @@ class Raw_Profile():
 
         return to_return
 
+    def _read_csv(self, file_path):
+
+        csv_header = ["date", 'lat', 'lon', 'alt', 'pressure',
+                      'roll', 'pitch', 'yaw',
+                      'gyry', 'gyrx', 'gyrz',
+                      'vx', 'vy', 'vz',
+                      'accx', 'accy', 'accz',
+                      'temp1', 'temp2', 'temp3', 'temp4', 'temp5',
+                      'rh1', 'rh2', 'rh3', 'rh4', 'rh5',
+                      'gpsboottime', 'pressureboottime', 'attitudeboottime', 'imetboottime',
+                      'temp_r1', 'temp_r2', 'temp_r3', 'temp_r4', 'temp_r5']
+        data_types = {}
+        for name in csv_header:
+            data_types[name] = float  # Everything should be floats
+        data_types['date'] = str  # Except the date string
+
+        sensor_names = {}
+
+        # Read in the CSV
+        data = pd.read_csv(file_path, names=csv_header, infer_datetime_format=False, dtype=data_types)
+
+        # Convert to a dict for ease of not working with a pandas dataframe
+        data = data.to_dict('list')
+        data_len = len(data['date'])
+
+        ######
+        # Format into temp list following the format used for the full logs
+        ######
+        sensor_names["IMET"] = {}
+        temp_list = [[] for x in range(10)]  # Ignoring the 5th sensor spot in the csvs so we don't break things...
+        sensor_numbers = np.add(range(int((len(temp_list)-2) / 2)), 1)
+
+        for num in sensor_numbers:
+            sensor_names["IMET"]["temp" + str(num)] = 2 * num - 2
+            sensor_names["IMET"]["temp_r" + str(num)] = 2 * num - 1
+
+        sensor_names["IMET"]["Fan"] = -2
+        sensor_names["IMET"]["Time"] = -1
+
+        # Read fields into temp_list
+        for key, value in sensor_names["IMET"].items():
+            try:
+                if 'Time' in key:
+                    temp_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+
+                else:
+                    temp_list[value] = data[key]
+
+            except KeyError:
+                # Any expected variable that was not logged will show
+                # as a list of NaN.
+                temp_list[value] += [np.nan for foo in range(data_len)]
+
+        ######
+        # Format into rhum list following the format used for the full logs
+        ######
+        sensor_names["RHUM"] = {}
+        rh_list = [[] for x in range(10)]  # Ignoring the 5th sensor spot in the csvs so we don't break things...
+        sensor_numbers = np.add(range(int((len(rh_list) - 2) / 2)), 1)
+
+        for num in sensor_numbers:
+            sensor_names["RHUM"]["rh" + str(num)] = 2 * num - 2
+            sensor_names["RHUM"]["rh_t" + str(num)] = 2 * num - 1
+        sensor_names["RHUM"]["Time"] = -1
+
+        # Read fields into rh_list
+        for key, value in sensor_names["RHUM"].items():
+            try:
+                if 'Time' in key:
+                    rh_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data[
+                        'date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+
+                else:
+                    rh_list[value] = data[key]
+
+            except KeyError:
+                # Any expected variable that was not logged will show
+                # as a list of NaN.
+                rh_list[value] += [np.nan for foo in range(data_len)]
+            except IndexError:
+                print("Error in Raw_Profile - 227")
+
+
+        ######
+        # Read in the GPS data
+        ######
+        pos_list = [[] for x in range(6)]
+
+        sensor_names["POS"] = {}
+
+        # Determine field names
+        sensor_names["POS"]["Lat"] = 0
+        sensor_names["POS"]["Lng"] = 1
+        sensor_names["POS"]["Alt"] = 2
+        sensor_names["POS"]["RelHomeAlt"] = 3
+        sensor_names["POS"]["RelOriginAlt"] = 4
+        sensor_names["POS"]["TimeUS"] = -1
+
+        # Read fields into gps_list, including TimeUS
+        for key, value in sensor_names["POS"].items():
+            try:
+                if 'Time' in key:
+                    pos_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+
+                else:
+                    if "Rel" in key:
+                        pos_list[value] = data['alt']
+                    elif "Lat" in key:
+                        pos_list[value] = data['lat']
+                    elif "Lng" in key:
+                        pos_list[value] = data['lon']
+                    elif 'Alt' in key:
+                        pos_list[value] = data['alt']
+                    else:
+                        pos_list[value] += [np.nan for foo in range(data_len)]
+            except KeyError:
+                pos_list[value] += [np.nan for foo in range(data_len)]
+
+        ######
+        # Read in Pressure data
+        ######
+        pres_list = [[] for x in range(5)]
+
+        sensor_names[self.baro] = {}
+
+        # Determine field names
+        sensor_names[self.baro]["Press"] = 0
+        sensor_names[self.baro]["Temp"] = 1
+        sensor_names[self.baro]["GndTemp"] = 2
+        sensor_names[self.baro]["Alt"] = 3
+        sensor_names[self.baro]["TimeUS"] = 4
+
+        # Read fields into gps_list, including TimeUS
+        for key, value in sensor_names[self.baro].items():
+            try:
+                if 'Time' in key:
+                    pres_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+
+                else:
+                    if "Press" in key:
+                        pres_list[value] = data['pressure']
+                    elif "Alt" in key:
+                        pres_list[value] = data['alt']
+                    else:
+                        pres_list[value] += [np.nan for foo in range(data_len)]
+            except KeyError:
+                pres_list[value] += [np.nan for foo in range(data_len)]
+
+        ######
+        # Read in rotation data
+        ######
+        rotation_list = [[] for x in range(10)]
+
+        sensor_names["NKF1"] = {}
+
+        # Determine field names
+        sensor_names["NKF1"]["VE"] = 0
+        sensor_names["NKF1"]["VN"] = 1
+        sensor_names["NKF1"]["VD"] = 2
+        sensor_names["NKF1"]["Roll"] = 3
+        sensor_names["NKF1"]["Pitch"] = 4
+        sensor_names["NKF1"]["Yaw"] = 5
+        sensor_names["NKF1"]["PN"] = 6
+        sensor_names["NKF1"]["PE"] = 7
+        sensor_names["NKF1"]["PD"] = 8
+        sensor_names["NKF1"]["TimeUS"] = -1
+
+        for key, value in sensor_names["NKF1"].items():
+            try:
+                if 'Time' in key:
+                    rotation_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+
+                elif 'VE' in key:
+                    rotation_list[value] = data['vx']
+                elif 'VN' in key:
+                    rotation_list[value] = data['vy']
+                elif 'VZ' in key:
+                    rotation_list[value] = data['vz']
+                else:
+                    rotation_list[value] = data[key.lower()]
+            except KeyError:
+                rotation_list[value] += [np.nan for foo in range(data_len)]
+
+        ######
+        # Read in IMU data
+        ######
+
+        imu_list = [[] for x in range(7)]
+
+        sensor_names['IMU'] = {}
+
+        sensor_names['IMU']['GyrX'] = 0
+        sensor_names['IMU']['GyrY'] = 1
+        sensor_names['IMU']['GyrZ'] = 2
+        sensor_names['IMU']['AccX'] = 3
+        sensor_names['IMU']['AccY'] = 4
+        sensor_names['IMU']['AccZ'] = 5
+        sensor_names['IMU']['TimeUS'] = -1
+
+        try:
+            if 'Time' in key:
+                imu_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+
+            else:
+                imu_list[value] = data[key.lower()]
+
+        except KeyError:
+            imu_list[value] += [np.nan for forr in range(data_len)]
+
+
+        #####
+        # Add in the units
+        #####
+
+        # Temperature
+        for i in range(int((len(temp_list) - 1) / 2)):
+            try:
+                temp_list[2*i] = np.array(temp_list[2*i]) * units.K
+                temp_list[2*i + 1] = np.array(temp_list[2*i + 1]) * units.ohm
+            except IndexError:
+                # print("No data for sensor ", i + 1)
+                continue
+
+        # RH
+        for i in range(len(rh_list) - 1):
+            # rh
+            if i % 2 == 0:
+                rh_list[i] = np.array(rh_list[i]) * units.percent
+            # temp
+            else:
+                rh_list[i] = np.array(rh_list[i]) * units.kelvin
+
+        # POS
+        ground_alt = 0  # Hard coded since we don't have MSL alt in these files for some reason...
+        # Profiles have not yet been separated.
+        pos_list[0] = np.array(pos_list[0]) * units.deg  # lat
+        pos_list[1] = np.array(pos_list[1]) * units.deg  # lng
+        pos_list[2] = np.array(pos_list[2]) * units.m  # alt
+        pos_list[3] = np.array(pos_list[3]) * units.m  # relHomeAlt
+        pos_list[4] = np.array(pos_list[4]) * units.m  # relOrigAlt
+
+        # PRES
+        pres_list[0] = np.array(pres_list[0]) * units.Pa
+        pres_list[1] = np.array(pres_list[1]) * units.fahrenheit
+        pres_list[2] = np.array(pres_list[2]) * units.fahrenheit
+        pres_list[3] = np.array(np.add(pres_list[3], ground_alt)) * units.m
+
+        # ROTATION
+        for i in range(len(rotation_list) - 1):
+            if i < 3:
+                rotation_list[i] = np.array(rotation_list[i]) \
+                                            * units.m / units.s
+            elif i >= 6:
+                rotation_list[i] = np.array(rotation_list[i]) \
+                                   * units.m
+            else:
+                rotation_list[i] = np.rad2deg(np.array(rotation_list[i])) * units.deg
+
+        # IMU List
+        if imu_list is not None:
+            self.imu = tuple(imu_list)
+
+        #
+        # Convert to tuple
+        #
+        self.temp = tuple(temp_list)
+        self.rh = tuple(rh_list)
+        self.pos = tuple(pos_list)
+        self.pres = tuple(pres_list)
+        self.rotation = tuple(rotation_list)
+
+
     def _read_JSON(self, file_path, nc_level='low'):
         """ Reads data from a .JSON file. Called by the constructor.
 
@@ -322,6 +613,7 @@ class Raw_Profile():
         message_list = None
         wind_list = None
         rpm_list = None
+        imu_list = None
         # sensor_names will be dictionary of dictionaries formatted
         # {
         #     "valid_from": ,
@@ -385,7 +677,6 @@ class Raw_Profile():
                     for num in sensor_numbers:
                         sensor_names["IMET"]["T"+str(num)] = 2*num - 2
                         sensor_names["IMET"]["R"+str(num)] = 2*num - 1
-                    sensor_names["IMET"]["Fan"] = -2
                     sensor_names["IMET"]["Time"] = -1
 
 
@@ -623,6 +914,34 @@ class Raw_Profile():
                     elif value == elem['data']['Instance']:
                         rpm_list[value].append(elem['data']["RPM"])
 
+            elif elem['meta']["type"] == "IMU":
+
+                if "I" in elem['data'].keys():  # Older files didn't have this, in the data. Instead had "IMU", "IMU2", ...
+                    if elem['data']['I'] != 0:
+                        continue
+
+                if imu_list is None:
+                    imu_list = [[] for x in range(7)]
+
+                    sensor_names['IMU'] = {}
+
+                    sensor_names['IMU']['GyrX'] = 0
+                    sensor_names['IMU']['GyrY'] = 1
+                    sensor_names['IMU']['GyrZ'] = 2
+                    sensor_names['IMU']['AccX'] = 3
+                    sensor_names['IMU']['AccY'] = 4
+                    sensor_names['IMU']['AccZ'] = 5
+                    sensor_names['IMU']['TimeUS'] = -1
+
+                # Determine the field names
+                for key, value in sensor_names["IMU"].items():
+
+                    if 'Time' in key:
+                        time = dt.utcfromtimestamp(elem["meta"]["timestamp"])
+                        imu_list[value].append(time)
+
+                    else:
+                        imu_list[value].append(elem['data'][key])
 
 
         #
@@ -699,6 +1018,10 @@ class Raw_Profile():
             rpm_list[-1] = avg_times
 
             self.rpm = tuple(rpm_list)
+
+        # IMU List
+        if imu_list is not None:
+            self.imu = tuple(imu_list)
 
         #
         # Convert to tuple

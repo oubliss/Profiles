@@ -44,7 +44,7 @@ class Profile():
                ascent=True, dev=False, confirm_bounds=True,
                index_list=None, scoop_id=None, raw_profile=None,
                profile_start_height=None, nc_level='low', base_start=None,
-               metadata=None):
+               metadata=None, **kwargs):
         """ Creates a Profile object.
 
         :param string file_path: data file
@@ -86,7 +86,7 @@ class Profile():
             self._raw_profile = raw_profile
         else:
             self._raw_profile = Raw_Profile(file_path, dev, scoop_id,
-                                            metadata=metadata)
+                                            metadata=metadata, **kwargs)
         self._units = self._raw_profile.get_units()
         self._pos = self._raw_profile.pos_data()
         self._pres = (self._raw_profile.pres[0], self._raw_profile.pres[-1])
@@ -99,17 +99,19 @@ class Profile():
             profile_start_height = profile_start_height * self._units.m
         try:
             if index_list is None:
-                # index_list = utils.identify_profile(self._pos["alt_MSL"],
-                #                                     self._pos["time"], confirm_bounds,
-                #                                     profile_start_height=profile_start_height)
 
-                # Find the window where the scoop fan was active
-                foo = np.where(np.array(self._thermo_data['fan_flag']) > 0)[0]
-                fan_start = self._thermo_data['time_temp'][foo.min()]
-                fan_stop = self._thermo_data['time_temp'][foo.max()]
+                try:
+                    # Find the window where the scoop fan was active
+                    foo = np.where(np.array(self._thermo_data['fan_flag']) > 0)[0]
+                    fan_start = self._thermo_data['time_temp'][foo.min()]
+                    fan_stop = self._thermo_data['time_temp'][foo.max()]
 
-                index_list = utils.identify_profile_peaks(self._pos["alt_MSL"].magnitude, self._pos['time'],
-                                                          window=(fan_start, fan_stop))
+                    index_list = utils.identify_profile_peaks(self._pos["alt_MSL"].magnitude, self._pos['time'],
+                                                              window=(fan_start, fan_stop))
+                except ValueError:
+                    index_list = utils.identify_profile(self._pos["alt_MSL"],
+                                                        self._pos["time"], confirm_bounds,
+                                                        profile_start_height=profile_start_height)
 
             indices = index_list[profile_num - 1]
         except IndexError:
@@ -135,7 +137,7 @@ class Profile():
             self.file_path = file_path[:-3]
         elif ".json" in file_path or ".JSON" in file_path:
             self.file_path = file_path[:-5]
-        elif ".bin" in file_path or ".BIN" in file_path:
+        elif ".bin" in file_path or ".BIN" in file_path or ".csv" in file_path:
             self.file_path = file_path[:-4]
         else:
             print("File type not recognized")
@@ -178,8 +180,13 @@ class Profile():
 
 
         self._base_start = self.gridded_base[0]
-        self.copter_id = self._raw_profile.serial_numbers['copterID']
-        self.tail_number = Coef_Manager().get_tail_n(self.copter_id)
+        try:
+            self.copter_id = self._raw_profile.serial_numbers['copterID']
+            self.tail_number = Coef_Manager().get_tail_n(self.copter_id)
+        except Exception:
+            self.copter_id = -999
+            self.tail_number = self._raw_profile.tail_number
+
 
         self.__load_pos__()
 
@@ -332,7 +339,8 @@ class Profile():
                              units=self._units, file_path=file_path,
                              pos=self._pos,
                              meta=self.meta,
-                             nc_level=self._nc_level)
+                             nc_level=self._nc_level,
+                             tail_number=self.tail_number)
 
             if len(self._wind_profile.gridded_times) > len(self.gridded_times):
                 new_len = len(self.gridded_times)
@@ -530,6 +538,180 @@ class Profile():
         # Close the netCDF file
         main_file.close()
 
+
+        return None
+
+    def save_cfnetcdf(self, platform_name, terrain_elevation, file_path=None):
+        if file_path is None:
+            file_path = self.file_path
+
+        if '.nc' in file_path or '.cdf' in file_path:
+            file_name = file_path
+        elif self.meta is not None:
+            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
+                        str(self.meta.get("platform_id")) + "CMT" + self._ascent_filename_tag + ".c1." + \
+                        self.time[0].strftime("%Y%m%d.%H%M%S") + ".cdf"
+            file_name = os.path.join(os.path.dirname(file_path), file_name)
+
+        else:
+            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+
+        if self._wind_profile is None and self._thermo_profile is None:
+            print("No wind or thermo profile to save")
+            return
+
+        main_file = netCDF4.Dataset(file_name, "w", format="NETCDF4")
+
+        # Vital ncattrs
+        main_file.setncattr("Conventions", "CF-1.8, WMO-CF-1.0")
+        main_file.setncattr("wmo__cf_profile", "FM 303-2024")
+        main_file.setncattr("featureType", "trajectory")
+        main_file.setncattr("platform_name", f"CopterSonde {platform_name}")
+        main_file.setncattr("flight_id", f"{self.tail_number}_{self.gridded_base[0]}")
+        main_file.setncattr("site_terrain_elevation_height", terrain_elevation)
+        main_file.setncattr("processing_level", 'c1')
+        main_file.setncattr("processing_version", profiles.__version__)
+        main_file.setncattr("copter_id", self.copter_id)
+        main_file.setncattr("tail_number", self.tail_number)
+
+        main_file.setncattr('datafile_created_on_date', datetime.utcnow().isoformat())
+        main_file.setncattr('datafile_created_on_machine', os.uname().nodename)
+
+        main_file.setncattr("Reference1", "Segales, A. R., B. R. Greene, T. M. Bell, W. Doyle, J. J. Martin, "
+                                          "E. A. Pillar-Little, and P. B. Chilson, 2020: The CopterSonde: an insight"
+                                          " into the development of a smart unmanned aircraft system for atmospheric "
+                                          "boundary layer research. Atmospheric Measurement Techniques, 13, 2833–2848, "
+                                          "https://doi.org/10.5194/amt-13-2833-2020.")
+        main_file.setncattr("Reference1", "Bell, T. M., B. R. Greene, P. M. Klein, M. Carney, and "
+                                          "P. B. Chilson, 2020: Confronting the boundary layer data gap: evaluating new "
+                                          "and existing methodologies of probing the lower atmosphere. Atmospheric "
+                                          "Measurement Techniques, 13, 3855–3872, https://doi.org/10.5194/amt-13-3855-2020.")
+
+        # Create the dimensions
+        main_file.createDimension("obs", None)
+
+        # TIME
+        # Be sure to use self.time instead of self.gridded_times since we want to store the mean time between two levels
+        # of gridded times
+        time_var = main_file.createVariable("time", "f8", ("obs",))
+        time_var[:] = netCDF4.date2num(self.time,
+                                       units='microseconds since \
+                                                       2010-01-01T00:00:00Z')
+        time_var.units = 'microseconds since 2010-01-01T00:00:00Z'
+        time_var.setncattr('standard_name', 'time')
+        time_var.setncattr('long_name', 'time')
+        time_var.setncattr('axis', 'T')
+
+        # # Do base_time and time_offset like ARM
+        # bt = abs((self.time[0] - datetime(1970, 1, 1)).total_seconds())
+        # bt_var = main_file.createVariable('base_time', 'i8')
+        # bt_var.setncattr('long_name', 'Base time in Epoch')
+        # bt_var.setncattr('ancillary_variables', 'time_offset')
+        # bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
+        # bt_var[:] = bt
+        #
+        # to = netCDF4.date2num(self.time,
+        #                       units=f'seconds since {self.time[0]:%Y-%m-%d %H:%M:%S UTC}')
+        # to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
+        # to_var.setncattr('long_name', 'Time offset from base_time')
+        # to_var.setncattr('units', f'seconds since {self.time[0]:%Y-%m-%d %H:%M:%S UTC}')
+        # to_var.setncattr('ancillary_variables', 'base_time')
+        # to_var[:] = to
+
+        # ALT
+        alt_var = main_file.createVariable("altitude", "f8", ("obs",))
+        alt_var.units = str(self.alt.units)
+        alt_var.setncattr('long_name', 'altitude_above_sea_level')
+        alt_var.setncattr('standard_name', 'altitude_above_sea_level')
+        alt_var.setncattr('positive', 'up')
+        alt_var.setncattr('axis', 'Z')
+        alt_var[:] = self.alt.magnitude
+
+        # PRES
+        pres_var = main_file.createVariable("pressure", "f8", ("obs",))
+        pres_var.units = str(self.pres.units)
+        pres_var.setncattr('long_name', 'air_pressure')
+        pres_var.setncattr('standard_name', 'pressure')
+        pres_var.setncattr('positive', 'up')
+        pres_var.setncattr('axis', 'Z')
+        pres_var[:] = self.pres.magnitude
+
+        # LAT
+        lat_var = main_file.createVariable("lat", "f8", ("obs",))
+        lat_var.units = 'degrees_north'
+        lat_var.setncattr('standard_name', 'latitude')
+        lat_var.setncattr('axis', 'Y')
+        lat_var[:] = self.lat.magnitude
+
+        # LON
+        lon_var = main_file.createVariable("lon", "f8", ("obs",))
+        lon_var.units = 'degrees_east'
+        lon_var.setncattr('standard_name', 'longitude')
+        lon_var.setncattr('axis', 'X')
+        lon_var[:] = self.lon.magnitude
+
+        if self._thermo_profile is not None:
+            # TEMP
+            temp_var = main_file.createVariable("air_temperature", "f8", ("obs",))
+            temp_var[:] = self._thermo_profile.temp.magnitude
+            temp_var.units = str(self._thermo_profile.temp.units)
+            temp_var.standard_name = "air_temperature"
+            temp_var.long_name = "bulk temperature of the air"
+
+            temp_var = main_file.createVariable("relative_humidity", "f8", ("obs",))
+            temp_var[:] = self._thermo_profile.rh.magnitude
+            temp_var.units = str(self._thermo_profile.rh.units)
+            temp_var.standard_name = "relative_humidity"
+            temp_var.long_name = "Relative humidity of the air"
+
+            # MIXING RATIO
+            mr_var = main_file.createVariable("humidity_mixing_ratio", "f8", ("obs",))
+            mr_var[:] = self._thermo_profile.mixing_ratio.magnitude
+            mr_var.units = 'kg/kg'
+            mr_var.standard_name = "humidity_mixing_ratio"
+            mr_var.long_name = "Humidity Mixing Ratio"
+            # # THETA
+            # theta_var = main_file.createVariable("theta", "f8", ("time",))
+            # theta_var[:] = self._thermo_profile.theta.magnitude
+            # theta_var.units = str(self._thermo_profile.theta.units)
+            # theta_var.long_name = "Potential temperature"
+            # # T_D
+            # Td_var = main_file.createVariable("Td", "f8", ("time",))
+            # Td_var[:] = self._thermo_profile.T_d.magnitude
+            # Td_var.units = str(self._thermo_profile.T_d.units)
+            # Td_var.long_name = "Dew point temperature"
+            # # Q
+            # q_var = main_file.createVariable("q", "f8", ("time",))
+            # q_var[:] = self._thermo_profile.q.magnitude * 1e3
+            # q_var.units = str(self._thermo_profile.q.units)
+            # q_var.long_name = "Specific humidity"
+
+        if self._wind_profile is not None:
+            # DIRECTION
+            dir_var = main_file.createVariable("wind_direction", "f8", ("obs",))
+            dir_var[:] = self._wind_profile.dir.magnitude
+            dir_var.units = str(self._wind_profile.dir.units)
+            dir_var.standard_name = 'wind_from_direction'
+            dir_var.long_name = "Wind direction"
+            # SPEED
+            spd_var = main_file.createVariable("wind_speed", "f8", ("obs",))
+            spd_var[:] = self._wind_profile.speed.magnitude
+            spd_var.units = str(self._wind_profile.speed.units)
+            spd_var.standard_name = "wind_speed"
+            spd_var.long_name = "Wind speed"
+            # # U
+            # u_var = main_file.createVariable("wind_u", "f8", ("time",))
+            # u_var[:] = self._wind_profile.u.magnitude
+            # u_var.units = str(self._wind_profile.u.units)
+            # u_var.long_name = "westward wind component"
+            # # V
+            # v_var = main_file.createVariable("wind_v", "f8", ("time",))
+            # v_var[:] = self._wind_profile.v.magnitude
+            # v_var.units = str(self._wind_profile.v.units)
+            # v_var.long_name = "northward wind component"
+
+        # Close the netCDF file
+        main_file.close()
 
         return None
 

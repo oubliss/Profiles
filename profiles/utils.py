@@ -323,6 +323,7 @@ def regrid_data_group_interp(data=None, data_times=None, gridded_times=None, uni
                 'values': data[data_seg_start_ind:data_seg_end_ind+1]
             }
 
+
 def temp_calib(resistance, sn):
     """ Converts resistance to temperature using the coefficients for the \
        sensor specified OR generalized coefficients if the serial number (sn)\
@@ -603,6 +604,8 @@ def identify_profile_peaks(alts, alt_times, window=None,
         foo = np.where((p_and_v >= window[0]) & (p_and_v <= window[1]))
         p_and_v = p_and_v[foo]
 
+    else:
+        p_and_v = np.sort(np.concatenate((peaks, valleys)))
 
     # Check the bounds if desired
     if confirm_bounds:

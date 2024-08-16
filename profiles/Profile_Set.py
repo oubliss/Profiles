@@ -33,7 +33,7 @@ class Profile_Set():
 
     def __init__(self, resolution=10, res_units='m', ascent=True,
                  dev=False, confirm_bounds=True, profile_start_height=None,
-                 nc_level='none'):
+                 nc_level=None, legacy_peak_id=False, tail_number=None):
         """ Creates a Profiles object.
 
         :param int resolution: resolution to which data should be
@@ -64,16 +64,19 @@ class Profile_Set():
         self.dev = dev
         self.confirm_bounds = confirm_bounds
         self.profiles = []
+        self.legacy_peaks = legacy_peak_id
+        self.tail_number = tail_number
 
         if profile_start_height is not None:
             self.profile_start_height = profile_start_height * units.m
+            self._base_start = profile_start_height * units.m
         else:
             self.profile_start_height = None
+            self._base_start = None
 
         #self.meta = None
         self._nc_level = nc_level
         self._root_dir = ""
-        self._base_start = None
 
     def add_all_profiles(self, file_path, metadata=None):
         """ Reads a file, splits it in to several vertical profiles, and adds
@@ -104,28 +107,35 @@ class Profile_Set():
         # Process altitude data for profile identification
         raw_profile_set = Raw_Profile(file_path, self.dev,
                                       nc_level=self._nc_level,
-                                      metadata=metadata)
+                                      metadata=metadata, tail_number=self.tail_number)
 
         pos = raw_profile_set.pos_data()
 
         # Find the window where the scoop fan was active
-        foo = np.where(np.array(raw_profile_set.thermo_data()['fan_flag']) > 0)[0]
-        fan_start_time = raw_profile_set.thermo_data()['time_temp'][foo.min()]
-        fan_stop_time = raw_profile_set.thermo_data()['time_temp'][foo.max()]
+        try:
+            foo = np.where(np.array(raw_profile_set.thermo_data()['fan_flag']) > 0)[0]
+            fan_start_time = raw_profile_set.thermo_data()['time_temp'][foo.min()]
+            fan_stop_time = raw_profile_set.thermo_data()['time_temp'][foo.max()]
 
-        # Add 5 secs to the start time so the sensor reach their equilibrium
-        fan_stop_time += dt.timedelta(seconds=5)
+            # Add 5 secs to the start time so the sensor reach their equilibrium
+            fan_start_time += dt.timedelta(seconds=5)
 
-        index_list = utils.identify_profile_peaks(pos["alt_MSL"].magnitude, pos['time'],
-                                                  window=(fan_start_time, fan_stop_time),
-                                                  confirm_bounds=self.confirm_bounds)
+        except ValueError:  # Just use the full timeseries if the fan flag messes up
+            print("Error with the fan_flag.... Just using the start and end times of the file...")
+            fan_start_time = raw_profile_set.thermo_data()['time_temp'][0]
+            fan_stop_time = raw_profile_set.thermo_data()['time_temp'][-1]
 
-        # Identify the start, peak, and end indices of each profile
-        # index_list = utils.identify_profile(pos["alt_MSL"],
-        #                                     pos["time"], self.confirm_bounds,
-        #                                     to_return=[],
-        #                                     profile_start_height=self
-        #                                     .profile_start_height)
+        if not self.legacy_peaks:
+            index_list = utils.identify_profile_peaks(pos["alt_MSL"].magnitude, pos['time'],
+                                                      window=(fan_start_time, fan_stop_time),
+                                                      confirm_bounds=self.confirm_bounds)
+
+        else:
+            # Identify the start, peak, and end indices of each profile
+            index_list = utils.identify_profile(pos["alt_MSL"],
+                                                pos["time"], self.confirm_bounds,
+                                                to_return=[],
+                                                profile_start_height=self.profile_start_height)
 
         # Create a Profile object for each profile identified
         for profile_num in np.add(range(len(index_list)), 1):

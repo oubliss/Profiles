@@ -29,7 +29,7 @@ class Wind_Profile():
 
     def __init__(self, wind_dict, resolution, algorithm='linear', file_path=None,
                gridded_times=None, gridded_base=None, indices=(None, None),
-               ascent=True, units=None, pos=None, nc_level='low', meta=None):
+               ascent=True, units=None, pos=None, nc_level=None, tail_number=None, meta=None):
         """ Creates Wind_Profile object based on rotation data at the specified
         resolution
 
@@ -72,6 +72,7 @@ class Wind_Profile():
             self.ascent = ascent
             self.pres = wind_dict["pres"]
             self.alt = wind_dict["alt"]
+            self.tail_number = tail_number
             self._indices = indices
             self._units = units
             self._datadir = os.path.dirname(file_path + ".json")
@@ -174,10 +175,10 @@ class Wind_Profile():
         # self.pres = self.pres[0:minlen]
         # self.gridded_times = self.gridded_times[0:minlen]
 
-        #
+
         # save NC
-        #
-        if nc_level in 'low':
+
+        if nc_level is not None:
             self._save_netCDF(file_path)
 
     def truncate_to(self, new_len):
@@ -383,7 +384,7 @@ class Wind_Profile():
         """
 
         # TODO account for moving platform
-        tail_num = utils.coef_manager.get_tail_n(wind_data['serial_numbers']['copterID'])
+        tail_num = self.tail_number
 
         # psi and az represent the copter's direction in spherical coordinates
         psi = np.zeros(len(wind_data["roll"])) * self._units.rad
