@@ -91,7 +91,7 @@ class Raw_Profile():
             #     self._read_JSON(file_path, nc_level=nc_level)
             self.file_type = 'json'
             self._read_JSON(file_path, nc_level=nc_level)
-        elif "csv" in file_path:
+        elif ".csv" in file_path:
             self.file_type = 'csv'
             self._read_csv(file_path)
         elif ".nc" in file_path or ".NC" in file_path or ".cdf" in file_path:
@@ -677,6 +677,7 @@ class Raw_Profile():
                     for num in sensor_numbers:
                         sensor_names["IMET"]["T"+str(num)] = 2*num - 2
                         sensor_names["IMET"]["R"+str(num)] = 2*num - 1
+                    sensor_names["IMET"]["Fan"] = -2
                     sensor_names["IMET"]["Time"] = -1
 
 

@@ -566,8 +566,8 @@ class Profile():
         main_file.setncattr("Conventions", "CF-1.8, WMO-CF-1.0")
         main_file.setncattr("wmo__cf_profile", "FM 303-2024")
         main_file.setncattr("featureType", "trajectory")
-        main_file.setncattr("platform_name", f"CopterSonde {platform_name}")
-        main_file.setncattr("flight_id", f"{self.tail_number}_{self.gridded_base[0]}")
+        main_file.setncattr("platform_name", f"{platform_name}")
+        main_file.setncattr("flight_id", f"{platform_name}_{self.gridded_base[0]}")
         main_file.setncattr("site_terrain_elevation_height", terrain_elevation)
         main_file.setncattr("processing_level", 'c1')
         main_file.setncattr("processing_version", profiles.__version__)
@@ -593,11 +593,10 @@ class Profile():
         # TIME
         # Be sure to use self.time instead of self.gridded_times since we want to store the mean time between two levels
         # of gridded times
-        time_var = main_file.createVariable("time", "f8", ("obs",))
+        time_var = main_file.createVariable("time", "i8", ("obs",))
         time_var[:] = netCDF4.date2num(self.time,
-                                       units='microseconds since \
-                                                       2010-01-01T00:00:00Z')
-        time_var.units = 'microseconds since 2010-01-01T00:00:00Z'
+                                       units='seconds since 1970-01-01T00:00:00')
+        time_var.units = 'seconds since 1970-01-01T00:00:00'
         time_var.setncattr('standard_name', 'time')
         time_var.setncattr('long_name', 'time')
         time_var.setncattr('axis', 'T')
