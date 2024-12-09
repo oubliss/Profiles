@@ -567,7 +567,7 @@ class Profile():
         main_file.setncattr("wmo__cf_profile", "FM 303-2024")
         main_file.setncattr("featureType", "trajectory")
         main_file.setncattr("platform_name", f"{platform_name}")
-        main_file.setncattr("flight_id", f"{platform_name}_{self.gridded_base[0]}")
+        main_file.setncattr("flight_id", f"{platform_name}_{self.gridded_times[0]}")
         main_file.setncattr("site_terrain_elevation_height", terrain_elevation)
         main_file.setncattr("processing_level", 'c1')
         main_file.setncattr("processing_version", profiles.__version__)
@@ -675,10 +675,11 @@ class Profile():
             # theta_var.units = str(self._thermo_profile.theta.units)
             # theta_var.long_name = "Potential temperature"
             # # T_D
-            # Td_var = main_file.createVariable("Td", "f8", ("time",))
-            # Td_var[:] = self._thermo_profile.T_d.magnitude
-            # Td_var.units = str(self._thermo_profile.T_d.units)
-            # Td_var.long_name = "Dew point temperature"
+            Td_var = main_file.createVariable("dewpoint", "f8", ("obs",))
+            Td_var[:] = self._thermo_profile.T_d.magnitude
+            Td_var.units = str(self._thermo_profile.T_d.units)
+            Td_var.long_name = "Dew point temperature"
+            Td_var.standard_name = "dew_point_temperature"
             # # Q
             # q_var = main_file.createVariable("q", "f8", ("time",))
             # q_var[:] = self._thermo_profile.q.magnitude * 1e3

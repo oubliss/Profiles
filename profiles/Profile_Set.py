@@ -166,6 +166,8 @@ class Profile_Set():
         self.profiles.sort()
         print(len(self.profiles), "profile(s) including those added from file",
               file_path)
+
+        return  len(self.profiles)
         #if self.meta is None:
         #    self.meta = prof.meta
         #else:

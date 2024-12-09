@@ -912,7 +912,7 @@ class Raw_Profile():
                         # when the first message in the sequence of 4...
                         rpm_list[value].append(elem['meta']["timestamp"])
 
-                    elif value == elem['data']['Instance']:
+                    elif value == elem['data']['Instance'] % 4:  # NOTE: This will break for UAS without only 4 motors
                         rpm_list[value].append(elem['data']["RPM"])
 
             elif elem['meta']["type"] == "IMU":
