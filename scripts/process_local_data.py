@@ -3,11 +3,14 @@ from glob import glob
 
 from profiles import Profile, Profile_Set
 
+alt = 340
+copter_id = "coptersonde"
+
 file_dir = '/Users/tyler.bell/Data/OUTFLOW/IOP3/'
 bin_files = glob(os.path.join(file_dir, '*.BIN'))
-alt = 340
 print(bin_files)
-a = Profile_Set.Profile_Set(resolution=5, res_units='m', ascent=True, dev=True, confirm_bounds=True,
+
+a = Profile_Set.Profile_Set(resolution=5, res_units='m', ascent=True, dev=True, confirm_bounds=False,
                             nc_level=None, profile_start_height=alt)
 
 # Process the files
@@ -33,6 +36,7 @@ for p in a.profiles:
         p.get_thermo_profile()
         p.get_wind_profile()
 
-        p.save_netcdf(file_dir+f"coptersonde_{p.gridded_times[0].strftime('%Y%m%d_%H%M%S')}.cdf")
+        # p.save_netcdf(file_dir+f"coptersonde_{p.gridded_times[0].strftime('%Y%m%d_%H%M%S')}.cdf")
+        p.save_cfnetcdf(copter_id, alt, file_dir+f"coptersonde_{p.gridded_times[0].strftime('%Y%m%d_%H%M%S')}.cdf")
 
 

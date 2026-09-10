@@ -12,7 +12,7 @@ if not os.path.exists(download_dir):
     os.makedirs(download_dir)
 
 start = datetime(2024, 9, 8)
-end = datetime(2024, 9, 9)
+end = datetime(2024, 9, 15)
 
 # Connect to DLB
 conn = dlb.DLB()
@@ -28,6 +28,10 @@ ind = np.where((flight_times >= start) & (flight_times <= end))
 bin_files = []
 for f in flights[ind]:
     theplace = f.place_name.replace(' ', '').replace(',', '')
+
+    if not os.path.exists(f"{download_dir}/{theplace}/"):
+        os.makedirs(f"{download_dir}/{theplace}/")
+
     filename = f"{download_dir}/{theplace}/{f.place_name.replace(' ', '')}_flight{f.raw_data['flight_number']}_{f.flight_time:%Y%m%d_%H%M%S}.BIN"
     # filename = f"{download_dir}/ATDD/{f.place_name.replace(' ', '')}_flight{f.raw_data['flight_number']}_{f.flight_time:%Y%m%d_%H%M%S}.BIN"
     bin_files.append(filename)
@@ -43,8 +47,8 @@ did_not_process = []
 
 for place, place_guid in flight_locations:
 
-    # if 'Westheimer' not in place and "KAEFS" not in place:
-    #     continue
+    if 'Westheimer' not in place and "KAEFS" not in place:
+        continue
 
     # if 'Westheimer'  in place or "KAEFS"  in place:
     #     continue
@@ -55,7 +59,7 @@ for place, place_guid in flight_locations:
     alt = conn.get_place(place_guid).get_usgs_alt()  # Get the ground elevation from the USGS
     print(f"Processing files from {place} starting at altitude: {round(alt+10)}")
     a = Profile_Set.Profile_Set(resolution=5, res_units='m', ascent=True, dev=True, confirm_bounds=False,
-                                nc_level=None, profile_start_height=alt+10, legacy_peak_id=True)
+                                nc_level='low', profile_start_height=alt+10, legacy_peak_id=True)
 
     # Process the files
     for f, fn in zip(flights[ind], bin_files):
@@ -67,6 +71,12 @@ for place, place_guid in flight_locations:
         try:
             flight = conn.get_flight(f.guid, recursive=True)
             metadata = Meta.Meta(guid=f.guid)
+
+            serial_number = flight.drone.raw_data['serial_number']
+            wmo_id = serial_number[0:2]+serial_number[-3:]
+
+            if wmo_id != "BL025":
+                continue
 
             # If the json is already there, use that
             if os.path.exists(fn.replace('.BIN', '.json')):
@@ -82,15 +92,15 @@ for place, place_guid in flight_locations:
             p.lowpass_filter(wind=True, thermo=False, Fc=.06)
             # p.lowpass_filter(wind=False, thermo=True)
             p.get_thermo_profile()
-            p.get_wind_profile()
-            # p.get_wind_profile(algorithm='quadratic')
+            # p.get_wind_profile()
+            p.get_wind_profile(algorithm='quadratic')
             # p.save_netcdf()
 
             serial_number = flight.drone.raw_data['serial_number']
             wmo_id = serial_number[0:2]+serial_number[-3:]
             theplace = flight.place_name.replace(' ', '').replace(',', '')
 
-            filename = os.path.join(download_dir, theplace, f"UASDC_037_{wmo_id}_{p.gridded_times[0]:%Y%m%d%H%M%SZ}.nc")
+            filename = os.path.join(download_dir, theplace, f"UASDC_037_{wmo_id}_{p.gridded_times[0]:%Y%m%d%H%M%SZ}.b.nc")
             # filename = os.path.join(download_dir, 'ATDD', f"UASDC_015_CS2B_{p.gridded_times[0]:%Y%m%d%H%M%SZ}.nc")
             p.save_cfnetcdf(wmo_id, alt, filename)
 

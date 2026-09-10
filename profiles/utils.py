@@ -358,6 +358,8 @@ def rh_calib(raw, sn):
     except Exception:
         offset = 0
 
+    offset = 0
+
     return np.add(raw, offset)
 
 
@@ -524,7 +526,7 @@ def _bias(data, max_abs_error):
             # mean of means, eliminate it and perform analysis again.
             if(max_diff > max_abs_error):
                 to_return[furthest_from_mean] = 2
-                means[furthest_from_mean] = np.NaN
+                means[furthest_from_mean] = np.nan
             else:
                 return to_return
 
@@ -567,7 +569,7 @@ def _s_dev(data, max_abs_error):
             # mean of means, eliminate it and perform analysis again.
             if(max_diff > max_abs_error):
                 to_return[furthest_from_mean] = 3
-                sdevs[furthest_from_mean] = np.NaN
+                sdevs[furthest_from_mean] = np.nan
             else:
                 return to_return
 

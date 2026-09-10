@@ -285,7 +285,7 @@ class Wind_Profile():
             az[i] = np.arctan2(R[1, 2], R[0, 2])
 
         coefs = utils.coef_manager.get_coefs('Wind', tail_num, 'E1')
-        print(coefs)
+        # print(coefs)
         speed = float(coefs['A']) * np.sqrt(np.tan(psi)).magnitude + float(coefs['B'])
 
         speed = speed * self._units.m / self._units.s
