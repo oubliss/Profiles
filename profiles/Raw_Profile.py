@@ -13,7 +13,7 @@ import os
 
 from .utils import event_IDs
 
-units.define('percent = 0.01*count = %')
+# units.define('percent = 0.01*count = %')
 units.define('gPerKg = 0.001*count = g/Kg')
 
 
@@ -109,6 +109,20 @@ class Raw_Profile():
 
     def apply_thermo_coeffs(self):
 
+        original_lin_correction = [-0.09147587752933097, 1.5728324533619302]
+        original_sfc_correction = [19.9512, 1.1893, -0.1269, -6.5933e-04, -6.2418e-05, 1.6144e-04]
+
+        def correct_rh(Rh, T, corr):
+            if len(corr) == 2:
+                M, B = tuple(corr)
+                return Rh - (M * Rh + B)
+            else:
+                p00, p10, p01, p20, p11, p02 = tuple(corr)
+                return p00 + p10*Rh + p01*T + p20*Rh**2 + p11*Rh*T + p02*T**2
+
+        def correct_t(T, corr): 
+            return T - (T * corr[0] + corr[1])
+
         temp_dict = self.thermo_data()
 
         temp = []
@@ -119,33 +133,49 @@ class Raw_Profile():
         # Fill temp_raw
         use_resistance = False
         use_temp = False
+        # print(temp_dict.keys())
+        # for key in temp_dict.keys():
+        #     if "resi" in key:
+        #         use_resistance = True
+        #         # print("HELP ME UNDERSTAND")
+        #         if use_temp:
+        #             use_temp = False
+        #             temp_raw = []
+        #         temp_raw.append(temp_dict[key].magnitude)
+        #     if "temp" in key and "_" not in key and not use_resistance:
+        #         use_temp = True
+        #         temp_raw.append(temp_dict[key].magnitude)
+
         for key in temp_dict.keys():
-            if "resi" in key:
-                use_resistance = True
-                if use_temp:
-                    use_temp = False
-                    temp_raw = []
-                temp_raw.append(temp_dict[key].magnitude)
-            if "temp" in key and "_" not in key and not use_resistance:
-                use_temp = True
+            if "temp" in key and "_" not in key:
                 temp_raw.append(temp_dict[key].magnitude)
 
-        # Process resistance if needed
-        serial_numbers = temp_dict["serial_numbers"]
-        if use_resistance:
-            for i in range(len(temp_raw)):
-                temp_raw[i] = utils.temp_calib(temp_raw[i],
-                                               serial_numbers["imet" + str(i + 1)])
+        temp_raw.append(temp_dict['temp1'].magnitude)
+
+        # # Process resistance if needed
+        # serial_numbers = temp_dict["serial_numbers"]
+        # if use_resistance:
+        #     for i in range(len(temp_raw)):
+        #         temp_raw[i] = utils.temp_calib(temp_raw[i],
+        #                                        serial_numbers["imet" + str(i + 1)])
 
         rh_raw = []
-        # Fill rh_raw
-        for key in temp_dict.keys():
-            # Ensure only humidity is processed here
-            if "rh" in key and "temp" not in key and "time" not in key:
-                rh_raw.append(temp_dict[key].magnitude)
-        for i in range(len(rh_raw)):
-            rh_raw[i] = utils.rh_calib(rh_raw[i], serial_numbers["rh" + str(i + 1)])
+        # # Fill rh_raw
+        # for key in temp_dict.keys():
+        #     # Ensure only humidity is processed here
+        #     if "rh" in key and "temp" not in key and "time" not in key:
+        #         rh_raw.append(temp_dict[key].magnitude)
+        # for i in range(len(rh_raw)):
+        #     rh_raw[i] = utils.rh_calib(rh_raw[i], serial_numbers["rh" + str(i + 1)])
 
+        # for key in temp_dict.keys():
+            # if "rh" in key and "temp" not in key and "time" not in key:
+                # rh_raw.append(temp_dict[key].magnitude)
+
+        # foo_v2 = correct_rh(temp_dict['rh1'].magnitude, temp_dict['temp_rh1'].magnitude, original_lin_correction)
+        # foo_v3 = correct_rh(foo_v2, temp_dict['temp_rh1'].magnitude, original_sfc_correction)
+        
+        # rh_raw.append(foo_v3)
 
         self.calib_temp = temp_raw
         self.calib_rh = rh_raw

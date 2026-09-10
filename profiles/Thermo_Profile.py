@@ -124,37 +124,124 @@ class Thermo_Profile():
         rh = []
 
         temp_raw = []  # List of lists, each containing data from a sensor
-
-        # Fill temp_raw
-        use_resistance = False
-        use_temp = False
-        for key in temp_dict.keys():
-            if "resi" in key:
-                use_resistance = True
-                if use_temp:
-                    use_temp = False
-                    temp_raw = []
-                temp_raw.append(temp_dict[key].magnitude)
-            if "temp" in key and "_" not in key and not use_resistance:
-                use_temp = True
-                temp_raw.append(temp_dict[key].magnitude)
-
-        # Process resistance if needed
-        serial_numbers = temp_dict["serial_numbers"]
-        if use_resistance:
-            for i in range(len(temp_raw)):
-                temp_raw[i] = utils.temp_calib(temp_raw[i],
-                                               serial_numbers["imet"+str(i+1)])
-        # End if-else blocks
-
         rh_raw = []
-        # Fill rh_raw
+
+        # # Fill temp_raw
+        # use_resistance = False
+        # use_temp = False
+        # for key in temp_dict.keys():
+        #     if "resi" in key:
+        #         use_resistance = True
+        #         if use_temp:
+        #             use_temp = False
+        #             temp_raw = []
+        #         temp_raw.append(temp_dict[key].magnitude)
+        #     if "temp" in key and "_" not in key and not use_resistance:
+        #         use_temp = True
+        #         temp_raw.append(temp_dict[key].magnitude)
+
+        # # Process resistance if needed
+        serial_numbers = temp_dict["serial_numbers"]
+        # if use_resistance:
+        #     for i in range(len(temp_raw)):
+        #         temp_raw[i] = utils.temp_calib(temp_raw[i],
+        #                                        serial_numbers["imet"+str(i+1)])
+        # # End if-else blocks
+
+        # # Fill rh_raw
         for key in temp_dict.keys():
             # Ensure only humidity is processed here
             if "rh" in key and "temp" not in key and "time" not in key:
                 rh_raw.append(temp_dict[key].magnitude)
+
         for i in range(len(rh_raw)):
             rh_raw[i] = utils.rh_calib(rh_raw[i], serial_numbers["rh"+str(i+1)])
+
+        ### TEMP CODE FOR BL025 NEEDS REMOVED
+
+        # original_lin_correction = [-0.09147587752933097, 1.5728324533619302]
+        # original_sfc_correction = [19.9512, 1.1893, -0.1269, -6.5933e-04, -6.2418e-05, 1.6144e-04]
+        new_sfc_correction = [0.0012386860900849977,0.001702222893954777,0.1779786311910474,0.10762888964552535,-0.004186520870035257,-0.0005943883181092839,-0.0006298406240748776,-0.00040393164792200414,2.308740750612625e-05,1.29706083925234e-06,1.2872120688231147e-06,3.1870494133707326e-07]
+        def poly42_features(x, y):
+            """
+            Build the 12-column feature matrix for MATLAB's poly42 surface fit.
+            Terms: x^i * y^j where i+j <= 4 and j <= 2
+            Order: (0,0),(1,0),(0,1),(2,0),(1,1),(0,2),(3,0),(2,1),(1,2),(4,0),(3,1),(2,2)
+            """
+            x, y = np.asarray(x, float).ravel(), np.asarray(y, float).ravel()
+            cols = []
+            for total in range(5):          # total degree 0..4
+                for j in range(min(total, 2) + 1):   # j <= 2
+                    i = total - j
+                    cols.append(x**i * y**j)
+            return np.column_stack(cols)    # shape (N, 12)
+        
+        def apply_poly42(coeffs, H, T):
+            """                                                                      
+            Apply a poly42 surface correction given raw coefficients.                
+                                                                                    
+            Parameters                                                               
+            ----------                                                               
+            coeffs : array-like, shape (12,)
+                Coefficients in COEFF_NAMES order:                                   
+                [p00, p10, p01, p20, p11, p02, p30, p21, p12, p40, p31, p22]
+            H : array-like                                                           
+                Raw relative humidity (%).                                           
+            T : array-like                                                           
+                Temperature (K).                                                     
+                                                                                    
+            Returns
+            -------
+            np.ndarray
+                Corrected RH (%).
+            """
+            return poly42_features(H, T) @ np.asarray(coeffs, float)
+        
+        # def apply_poly42(coeffs, H, T):                                              
+        #     """                                                                    
+        #     coeffs : array-like, shape (12,)                                         
+        #         [p00, p10, p01, p20, p11, p02, p30, p21, p12, p40, p31, p22]         
+        #     H : array-like  — raw RH (%)                                             
+        #     T : array-like  — temperature (K)                                        
+        #     """                                                                      
+        #     p00, p10, p01, p20, p11, p02, p30, p21, p12, p40, p31, p22 = coeffs      
+        #     H, T = np.asarray(H, float), np.asarray(T, float)                        
+        #     return (p00                                                              
+        #             + p10*H       + p01*T                                            
+        #             + p20*H**2    + p11*H*T      + p02*T**2                          
+        #             + p30*H**3    + p21*H**2*T   + p12*H*T**2                        
+        #             + p40*H**4    + p31*H**3*T   + p22*H**2*T**2)
+
+        # def correct_rh(Rh, T, corr):
+        #     if len(corr) == 2:
+        #         M, B = tuple(corr)
+        #         return Rh - (M * Rh + B)
+        #     else:
+        #         p00, p10, p01, p20, p11, p02 = tuple(corr)
+        #         return p00 + p10*Rh + p01*T + p20*Rh**2 + p11*Rh*T + p02*T**2
+
+        # def correct_t(T, corr): 
+        #     return T - (T * corr[0] + corr[1])
+        
+        for key in temp_dict.keys():
+            if "temp" in key and "_" not in key:
+                temp_raw.append(temp_dict[key].magnitude)
+
+        temp_foo = np.mean(np.array([temp_dict['temp1'].magnitude, 
+                                    temp_dict['temp2'].magnitude, 
+                                    temp_dict['temp3'].magnitude]), axis=0)
+        # temp_raw.append(temp_dict['temp1'].magnitude)
+
+        # foo_v2 = correct_rh(temp_dict['rh1'].magnitude, temp_dict['temp_rh1'].magnitude, original_lin_correction)
+        # foo_v3 = correct_rh(temp_dict['rh1'].magnitude, temp_dict['temp1'].magnitude, original_sfc_correction)
+        # foo_v3 = correct_rh(foo_v2, temp_dict['temp_rh1'].magnitude, original_sfc_correction)
+        
+        # foo_v3 = apply_poly42(new_sfc_correction, temp_dict['rh1'].magnitude, temp_foo,)
+
+        # rh_raw.append(foo_v3)
+
+        #### END OF TEMP CODE
+
         alts = np.array(temp_dict["alt_pres"].magnitude)\
             * temp_dict["alt_pres"].units
         pres = np.array(temp_dict["pres"].magnitude)\
@@ -165,11 +252,12 @@ class Thermo_Profile():
         time_temp = temp_dict["time_temp"]
         # Determine bad sensors
         self.rh_flags = utils.qc(rh_raw, 0.4, 0.2)  # TODO read these from file
+        self.rh_flags = [2, 2, 0, 4]
 
         # Remove bad sensors
         for flags_ind in range(len(self.rh_flags)):
             if self.rh_flags[flags_ind] != 0:
-                rh_raw[flags_ind] = np.full(len(rh_raw[flags_ind]), np.NaN)
+                rh_raw[flags_ind] = np.full(len(rh_raw[flags_ind]), np.nan)
 
         # Average the sensors
         for i in range(len(rh_raw[0])):
@@ -312,6 +400,7 @@ class Thermo_Profile():
         # Get the flags in
         #
         flag_dict = {0: "good",
+                     1: "manual removal",
                      2: "bias",
                      3: "lag",
                      4: "empty"}
