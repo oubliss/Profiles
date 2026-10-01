@@ -1,0 +1,11 @@
+SensorType,SerialNumber,ScoopID,Equation,A,B,C,D,Offset,SensorStatus
+Imet,62275,F,E2,9.89E-04,2.65E-04,1.38E-07,na,na,Active
+Imet,62288,F,E2,9.89E-04,2.65E-04,1.37E-07,na,na,Active
+Imet,62298,F,E2,9.71E-04,2.69E-04,1.26E-07,na,na,Active
+Imet,0,na,E2,1.01E-03,2.62E-04,1.50E-07,na,na,na
+RH,16,F,E3,9.10E-02,2.84E-01,na,na,na,Active
+RH,17,F,E3,1.80E-01,2.26E-01,na,na,na,Active
+RH,18,F,E3,9.30E-02,4.52E-01,na,na,na,Active
+RH,0,na,na,na,na,na,na,0,na
+Wind,N934UA,na,E1,3.21E+01,-4.20E+00,na,na,na,Active
+Wind,0,na,E1,2.96E+01,-3.53E+00,na,na,na,na

@@ -15,19 +15,24 @@ setuptools.setup(
     url="https://github.com/oucass/Profiles",
     packages=setuptools.find_packages(),
     install_requires = [
-        'metpy>=1.1.0',
-        'pymavlink',
-        'netCDF4',
-        'matplotlib',
-        'pandas',
+        'metpy>=1.6',
+        'pymavlink>=2.4.40',
+        'netCDF4>=1.6',
+        'matplotlib>=3.8',
+        'pandas>=2.0',
+        'scipy>=1.11',
+        'requests',
         'cmocean',
-        'numpy>=1.16.5'
+        'numpy>=2.0'
     ],
+    extras_require={
+        'test': ['pytest>=7.0'],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.7',
+    python_requires='>=3.10',
     include_package_data=True,
 )

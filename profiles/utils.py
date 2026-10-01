@@ -18,7 +18,48 @@ from .Coef_Manager import Coef_Manager
 
 
 package_path = os.path.dirname(os.path.abspath(__file__))
-coef_manager = Coef_Manager()  # All required input is given in __init__.py
+
+_coef_manager = None
+
+
+def get_coef_manager():
+    """ Return the shared Coef_Manager, constructing it on first use.
+
+    Construction reads the coefficient tables off disk, so it is deferred
+    until something actually needs coefficients. Importing this package must
+    not require ~/.wxuas to exist, and callers (notably the test suite) must
+    be able to point profiles.conf.coef_info at a different directory after
+    import but before the first lookup.
+
+    :rtype: profiles.Coef_Manager.Coef_Manager
+    :return: the process-wide Coef_Manager
+    """
+    global _coef_manager
+    if _coef_manager is None:
+        _coef_manager = Coef_Manager()
+    return _coef_manager
+
+
+def reset_coef_manager():
+    """ Discard the cached Coef_Manager so the next lookup rebuilds it.
+
+    Needed when coef_info is repointed at a different coefficient directory
+    part-way through a process, which the tests do.
+    """
+    global _coef_manager
+    _coef_manager = None
+
+
+def __getattr__(name):
+    """ Keep ``utils.coef_manager`` working as a lazily-built module attribute.
+
+    Several modules reach for ``utils.coef_manager`` directly. PEP 562 module
+    __getattr__ lets that keep working without constructing the manager at
+    import time.
+    """
+    if name == "coef_manager":
+        return get_coef_manager()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("error", category=UnitStrippedWarning)
@@ -335,7 +376,7 @@ def temp_calib(resistance, sn):
     :rtype: list<Quantity>
     :return: list of temperatures in K
     """
-    coefs = coef_manager.get_coefs("Imet", sn)
+    coefs = get_coef_manager().get_coefs("Imet", sn)
     a = float(coefs["A"])
     b = float(coefs["B"])
     c = float(coefs["C"])
@@ -352,9 +393,9 @@ def rh_calib(raw, sn):
     :rtype: list<Quantity>
     :return: list of calibrated rh
     """
-    offset = coef_manager.get_coefs('RH', sn)['A']
+    offset = get_coef_manager().get_coefs('RH', sn)['A']
     try:
-        offset = float(coef_manager.get_coefs('RH', sn)['A']) / 1000
+        offset = float(get_coef_manager().get_coefs('RH', sn)['A']) / 1000
     except Exception:
         offset = 0
 

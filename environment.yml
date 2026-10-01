@@ -1,13 +1,20 @@
 name: cass
 channels:
-  - defaults
+  - conda-forge
 dependencies:
-  - python=3.8
-  - matplotlib
-  - pandas
-  - netcdf4
+  # Verified working set as of 2026-10-01 (python 3.12.11, numpy 2.2.6,
+  # metpy 1.7.1, pint 0.25). The previous pins - python 3.8, metpy 0.12.2 -
+  # contradicted setup.py's metpy>=1.1.0 and no longer import.
+  - python>=3.10
+  - numpy>=2.0
+  - pandas>=2.0
+  - metpy>=1.6
+  - netcdf4>=1.6
+  - scipy>=1.11
+  - matplotlib>=3.8
+  - cmocean
+  - requests
+  - pytest>=7.0
   - pip
   - pip:
-    - azure-cosmosdb-table==1.0.6
-    - metpy==0.12.2
-    - pymavlink==2.4.9
+    - pymavlink>=2.4.40
