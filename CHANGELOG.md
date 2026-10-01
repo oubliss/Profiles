@@ -24,6 +24,32 @@ alongside the edges they bin with.
 Anything processed with 1.3.x and submitted to an archive is affected by both.
 `processing_version` moves to 1.4.0 so the two can be told apart.
 
+**Sensor QC removed the wrong sensor.** `utils._bias` and `_s_dev` put both
+the rejection and the return inside the per-sensor loop, while `max_diff`
+accumulated across it. The practical effect was that the *first* sensor was
+flagged almost regardless of which one was actually anomalous: with a single
+large outlier placed at each of four positions in turn, the old code flagged
+sensor 1 every time. The genuinely biased sensor stayed in the ensemble mean
+and a good sensor was discarded.
+
+On the reference flight this is not hypothetical:
+
+| | old flags | new flags |
+|---|---|---|
+| profile 0, temp | `[3 0 0 4]` | `[0 0 2 4]` |
+| profile 0, rh   | `[3 0 0 4]` | `[0 0 0 4]` |
+| profile 1, temp | `[2 0 0 4]` | `[0 0 2 4]` |
+
+Per-sensor means for profile 0 were imet1 295.606 K, imet2 295.808 K,
+imet3 295.075 K. imet3 is 0.42 K from the ensemble mean and imet1 is 0.11 K
+from it, so imet3 is the outlier — but imet1 was the sensor being thrown away.
+Correcting this shifts gridded temperature by **+0.28 K on average and up to
++0.36 K**, dewpoint by up to +0.34 K, and RH by up to +0.30 %.
+
+Rejection is now a single shared `_reject_outliers` helper: while the spread
+across accepted sensors exceeds the threshold, drop the one furthest from
+their mean and re-test, never going below two survivors.
+
 ### Fixed
 
 - `import profiles` no longer reads the filesystem. `utils.coef_manager` was

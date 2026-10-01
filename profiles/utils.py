@@ -529,6 +529,42 @@ def body2ned(xb, yb, zb, roll, pitch, yaw):
     return float(a[0]), float(a[1]), float(a[2])
 
 
+def _reject_outliers(statistics, max_abs_error, flag):
+    """ Iteratively flag the sensor furthest from the ensemble consensus.
+
+    While the spread across the still-accepted sensors exceeds
+    max_abs_error, drop the one furthest from their mean and re-test.
+
+    :param np.ndarray statistics: one summary statistic per sensor (mean for
+       bias, standard deviation for variability)
+    :param float max_abs_error: largest spread tolerated across the ensemble
+    :param int flag: flag value to record for each rejected sensor
+    :rtype: np.ndarray
+    :return: array of length len(statistics), 0 where accepted
+    """
+    statistics = np.array(statistics, dtype=float)
+    flags = np.zeros(len(statistics))
+
+    while True:
+        accepted = ~np.isnan(statistics)
+
+        # With fewer than two sensors left there is no consensus to compare
+        # against, so no further rejection is defensible.
+        if accepted.sum() < 2:
+            return flags
+
+        spread = statistics[accepted].max() - statistics[accepted].min()
+        if spread <= max_abs_error:
+            return flags
+
+        deviation = np.abs(statistics - np.mean(statistics[accepted]))
+        deviation[~accepted] = -np.inf
+
+        worst = int(np.argmax(deviation))
+        flags[worst] = flag
+        statistics[worst] = np.nan
+
+
 def _bias(data, max_abs_error):
     """ This method identifies sensors with excessive biases and returns a
     list flagging sensors determined to be questionable.
@@ -541,35 +577,12 @@ def _bias(data, max_abs_error):
     :return: list containing 0s by default and 2 in the position of each sensor
        flagged for bias.
     """
+    with warnings.catch_warnings():
+        # An all-NaN sensor is legitimate here; it simply never participates.
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        means = np.array([np.nanmean(sensor) for sensor in data], dtype=float)
 
-    to_return = np.zeros(len(data))
-    # Calculate the mean of each sensor
-    means = np.zeros(len(data))
-    for i in range(len(data)):
-        means[i] = np.nanmean(data[i])
-
-    while(True):
-        # Identify the sensor with the mean farthest from the mean of means
-        max_diff = 0
-        furthest_from_mean = 0  # index of sensor furthest from mean
-
-        for j in range(len(data)):
-
-            if(np.abs(np.nanmean(means)-means[j]) >
-               np.abs(np.nanmean(means)-means[furthest_from_mean])):
-                furthest_from_mean = j
-
-            for k in range(len(data)):
-                if(np.abs(means[j]-means[k]) > max_diff):
-                    max_diff = np.abs(means[j]-means[k])
-
-            # If the furthest sensor is farther than max_abs_error from the
-            # mean of means, eliminate it and perform analysis again.
-            if(max_diff > max_abs_error):
-                to_return[furthest_from_mean] = 2
-                means[furthest_from_mean] = np.nan
-            else:
-                return to_return
+    return _reject_outliers(means, max_abs_error, flag=2)
 
 
 def _s_dev(data, max_abs_error):
@@ -585,34 +598,11 @@ def _s_dev(data, max_abs_error):
     :return: list containing 0s by default and 3 in the position of each sensor
        flagged for variability.
     """
-    to_return = np.zeros(len(data))
-    # Calculate the mean of each sensor
-    sdevs = np.zeros(len(data))
-    for i in range(len(data)):
-        sdevs[i] = np.nanstd(data[i])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        sdevs = np.array([np.nanstd(sensor) for sensor in data], dtype=float)
 
-    while(True):
-        # Identify the sensor with the mean farthest from the mean of means
-        max_diff = 0
-        furthest_from_mean = 0  # index of sensor furthest from mean
-
-        for j in range(len(data)):
-
-            if(np.abs(np.nanmean(sdevs)-sdevs[j]) >
-               np.abs(np.nanmean(sdevs)-sdevs[furthest_from_mean])):
-                furthest_from_mean = j
-
-            for k in range(len(data)):
-                if(np.abs(sdevs[j]-sdevs[k]) > max_diff):
-                    max_diff = np.abs(sdevs[j]-sdevs[k])
-
-            # If the furthest sensor is farther than max_abs_error from the
-            # mean of means, eliminate it and perform analysis again.
-            if(max_diff > max_abs_error):
-                to_return[furthest_from_mean] = 3
-                sdevs[furthest_from_mean] = np.nan
-            else:
-                return to_return
+    return _reject_outliers(sdevs, max_abs_error, flag=3)
 
 
 def identify_profile_peaks(alts, alt_times, window=None,
