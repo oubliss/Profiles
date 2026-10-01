@@ -215,16 +215,16 @@ class Wind_Profile():
             cyaw = np.cos(wind_data["yaw"][i]).magnitude
             syaw = np.sin(wind_data["yaw"][i]).magnitude
 
-            Rx = np.matrix([[1, 0, 0],
+            Rx = np.array([[1, 0, 0],
                             [0, croll, sroll],
                             [0, -sroll, croll]])
-            Ry = np.matrix([[cpitch, 0, -spitch],
+            Ry = np.array([[cpitch, 0, -spitch],
                             [0, 1, 0],
                             [spitch, 0, cpitch]])
-            Rz = np.matrix([[cyaw, -syaw, 0],
+            Rz = np.array([[cyaw, -syaw, 0],
                             [syaw, cyaw, 0],
                             [0, 0, 1]])
-            R = Rz * Ry * Rx
+            R = Rz @ Ry @ Rx
 
             psi[i] = np.arccos(R[2, 2])
             az[i] = np.arctan2(R[1, 2], R[0, 2])
@@ -270,16 +270,16 @@ class Wind_Profile():
             cyaw = np.cos(wind_data["yaw"][i]).magnitude
             syaw = np.sin(wind_data["yaw"][i]).magnitude
 
-            Rx = np.matrix([[1, 0, 0],
+            Rx = np.array([[1, 0, 0],
                             [0, croll, sroll],
                             [0, -sroll, croll]])
-            Ry = np.matrix([[cpitch, 0, -spitch],
+            Ry = np.array([[cpitch, 0, -spitch],
                             [0, 1, 0],
                             [spitch, 0, cpitch]])
-            Rz = np.matrix([[cyaw, -syaw, 0],
+            Rz = np.array([[cyaw, -syaw, 0],
                             [syaw, cyaw, 0],
                             [0, 0, 1]])
-            R = Rz * Ry * Rx
+            R = Rz @ Ry @ Rx
 
             psi[i] = np.arccos(R[2, 2])
             az[i] = np.arctan2(R[1, 2], R[0, 2])

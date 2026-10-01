@@ -487,19 +487,19 @@ def ned2body(xned, yned, zned, roll, pitch, yaw):
     cyaw = np.cos(yaw)
     syaw = np.sin(yaw)
 
-    Rx = np.matrix([[1, 0, 0],
+    Rx = np.array([[1, 0, 0],
                     [0, croll, sroll],
                     [0, -sroll, croll]])
-    Ry = np.matrix([[cpitch, 0, -spitch],
+    Ry = np.array([[cpitch, 0, -spitch],
                     [0, 1, 0],
                     [spitch, 0, cpitch]])
-    Rz = np.matrix([[cyaw, -syaw, 0],
+    Rz = np.array([[cyaw, -syaw, 0],
                     [syaw, cyaw, 0],
                     [0, 0, 1]])
 
-    R = Rz * Ry * Rx
+    R = Rz @ Ry @ Rx
 
-    a = R * np.matrix([xned, yned, zned]).T
+    a = R @ np.array([xned, yned, zned])
 
     return float(a[0]), float(a[1]), float(a[2])
 
@@ -512,19 +512,19 @@ def body2ned(xb, yb, zb, roll, pitch, yaw):
     cyaw = np.cos(yaw)
     syaw = np.sin(yaw)
 
-    Rx = np.matrix([[croll, -sroll, 0],
+    Rx = np.array([[croll, -sroll, 0],
                     [sroll, croll, 0],
                     [0, 0, 1]])
-    Ry = np.matrix([[cpitch, 0, spitch],
+    Ry = np.array([[cpitch, 0, spitch],
                     [0, 1, 0],
                     [-spitch, 0, cpitch]])
-    Rz = np.matrix([[1, 0, 0],
+    Rz = np.array([[1, 0, 0],
                     [0, cyaw, -syaw],
                     [0, syaw, cyaw]])
 
-    R = Rx * Ry * Rz
+    R = Rx @ Ry @ Rz
 
-    a = R * np.matrix([xb, yb, zb]).T
+    a = R @ np.array([xb, yb, zb])
 
     return float(a[0]), float(a[1]), float(a[2])
 
