@@ -183,7 +183,7 @@ class Wind_Profile():
 
         # save NC
 
-        if nc_level is not None:
+        if utils.writes_netcdf(nc_level):
             self._save_netCDF(file_path)
 
     def truncate_to(self, new_len):

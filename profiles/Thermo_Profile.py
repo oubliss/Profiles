@@ -269,7 +269,7 @@ class Thermo_Profile():
         self.q = calc.specific_humidity_from_mixing_ratio(self.mixing_ratio) * \
                  units.gPerKg
 
-        if nc_level is not None:
+        if utils.writes_netcdf(nc_level):
             self._save_netCDF(file_path)
 
     def truncate_to(self, new_len):

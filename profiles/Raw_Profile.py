@@ -1047,7 +1047,7 @@ class Raw_Profile():
             self.wind = None
 
 
-        if nc_level == 'low':
+        if utils.writes_netcdf(nc_level):
             self.apply_thermo_coeffs()
             self.apply_wind_coeffs()
             self._save_netCDF(file_path)

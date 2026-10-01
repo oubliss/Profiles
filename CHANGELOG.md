@@ -72,6 +72,19 @@ their mean and re-test, never going below two survivors.
 - `Meta` read the flight file only when a *header* path was supplied.
 - Placeholder `lat`/`lon` (when no position is available) were built at the
   edge count rather than the output length.
+- `nc_level` now means one thing. `Raw_Profile` tested `== 'low'` while
+  `Thermo_Profile` and `Wind_Profile` tested `is not None`, so the documented
+  "write nothing" value `'none'` (a truthy string) suppressed the raw file
+  but still wrote `thermo_` and `wind_` ones. All three now share
+  `utils.writes_netcdf`, which accepts `None`/`'none'`/`'low'`
+  case-insensitively and warns on anything else.
+  **`scripts/process_data_from_dlb.py` passes `nc_level='None'`** and will
+  stop writing per-variable files as a result - that was always the
+  documented intent.
+- `utils.rh_calib` is now an explicit pass-through. It looked up the sensor's
+  `A` coefficient and then overwrote the result with `0` on the next line, so
+  no offset has ever reached the data. Behaviour is unchanged; the docstring
+  now records what has to be settled before a correction is reinstated.
 
 ### Added
 
@@ -82,14 +95,15 @@ their mean and re-test, never going below two survivors.
 
 ### Known issues not addressed here
 
+- `Thermo_Profile`/`Wind_Profile._save_netCDF` raise `IOError` under
+  `nc_level='low'` unless metadata or an explicit `.cdf` path is supplied.
+  Pre-existing; `Raw_Profile` falls back to a filename derived from the input
+  and does not.
+- RH per-sensor corrections are not applied at all (see `rh_calib`).
+
 - The repo's top-level `coefs/MasterCoefList.csv` cannot process the repo's
   own test flight: five rows per IMET sensor differing only by `ScoopID`,
   which `get_coefs` does not key on. It also disagrees with the live
   `~/.wxuas` table on the coefficient values themselves.
 - `plotting.contour_height_time` uses `Profile.gridded_base` (N+1 edges) as
   the vertical coordinate against N-point variables.
-- `utils.rh_calib` overwrites its coefficient lookup with `offset = 0`.
-- `utils._bias` / `_s_dev` can over-flag; the return and the flagging both sit
-  inside the sensor loop while `max_diff` accumulates across it.
-- `nc_level` means three different things across `Raw_Profile`,
-  `Thermo_Profile` and `Wind_Profile`.

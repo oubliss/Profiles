@@ -125,6 +125,34 @@ event_IDs = """
 """
 
 
+NC_LEVELS = ('low', 'none')
+
+
+def writes_netcdf(nc_level):
+    """ Should this nc_level write per-object NetCDF files?
+
+    The three classes used to disagree: Raw_Profile tested ``== 'low'`` while
+    Thermo_Profile and Wind_Profile tested ``is not None``. The documented
+    "write nothing" value, the string 'none', is truthy, so passing it wrote
+    thermo_ and wind_ files while suppressing the raw one.
+
+    :param nc_level: 'low' to write, None or 'none' to write nothing
+    :rtype: bool
+    """
+    if nc_level is None:
+        return False
+
+    normalised = str(nc_level).strip().lower()
+    if normalised not in NC_LEVELS:
+        warnings.warn(
+            f"unrecognised nc_level {nc_level!r}; expected one of "
+            f"{NC_LEVELS} or None. Treating it as 'none' and writing no "
+            f"NetCDF files.", stacklevel=2)
+        return False
+
+    return normalised == 'low'
+
+
 def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
                 units=None, indices=(None, None), base_start=None):
     """ Calculates times at which data means should be calculated.
@@ -386,22 +414,32 @@ def temp_calib(resistance, sn):
 
 
 def rh_calib(raw, sn):
-    """ Adds the sensor offsets
+    """ Return RH as reported. No per-sensor correction is applied.
 
-    :param list<Quanitity> raw: raw RH
-    :param int sn: serial number of the humidity sensor
+    This is deliberately a pass-through, and has been in effect since well
+    before 1.4.0 - the previous implementation looked up the sensor's 'A'
+    coefficient, divided it by 1000, and then unconditionally overwrote the
+    result with 0 on the next line, so no offset ever reached the data. That
+    has been made explicit here rather than left looking like a live
+    calculation.
+
+    Reinstating a correction is a scientific decision, not a cleanup, and
+    needs three things settled first:
+
+    * RH rows in MasterCoefList carry equation E3 with *two* coefficients
+      (A and B); a single additive offset cannot be the whole model.
+    * The /1000 scaling does not match the stored magnitudes. For the
+      sensors on the reference flight A is 9.10E-02, 1.80E-01 and 9.30E-02,
+      which after dividing by 1000 would shift RH by ~1e-4 %, i.e. nothing.
+    * Whatever is chosen has to be recorded in the output, or files
+      processed before and after become indistinguishable.
+
+    :param list<Quantity> raw: raw RH
+    :param int sn: serial number of the humidity sensor (currently unused)
     :rtype: list<Quantity>
-    :return: list of calibrated rh
+    :return: raw, unchanged
     """
-    offset = get_coef_manager().get_coefs('RH', sn)['A']
-    try:
-        offset = float(get_coef_manager().get_coefs('RH', sn)['A']) / 1000
-    except Exception:
-        offset = 0
-
-    offset = 0
-
-    return np.add(raw, offset)
+    return raw
 
 
 def qc(data, max_bias, max_variance):
