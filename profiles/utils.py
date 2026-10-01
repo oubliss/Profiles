@@ -213,7 +213,11 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
     ind_in_grid = []
     i = indices[0]
     for elem in new_base:
-        while base[i] < elem and i < indices[1]:
+        # Bound check first: i can be advanced past indices[1] by the
+        # increment below, and `and` does not short-circuit a subscript
+        # written on its left, so the original order raised IndexError
+        # when a profile ran to the last sample in the file.
+        while i < indices[1] and base[i] < elem:
             i += 1
         ind_in_grid.append(i)
         i += 1
@@ -224,7 +228,11 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
     ind_in_grid = []
     i = indices[0]
     for elem in base_edges:
-        while base[i] < elem and i < indices[1]:
+        # Bound check first: i can be advanced past indices[1] by the
+        # increment below, and `and` does not short-circuit a subscript
+        # written on its left, so the original order raised IndexError
+        # when a profile ran to the last sample in the file.
+        while i < indices[1] and base[i] < elem:
             i += 1
         ind_in_grid.append(i)
         i += 1
