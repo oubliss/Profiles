@@ -169,7 +169,7 @@ class Thermo_Profile():
         # Remove bad sensors
         for flags_ind in range(len(self.rh_flags)):
             if self.rh_flags[flags_ind] != 0:
-                rh_raw[flags_ind] = np.full(len(rh_raw[flags_ind]), np.NaN)
+                rh_raw[flags_ind] = np.full(len(rh_raw[flags_ind]), np.nan)
 
         # Average the sensors
         for i in range(len(rh_raw[0])):

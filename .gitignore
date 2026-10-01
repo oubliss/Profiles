@@ -1,4 +1,9 @@
 *.pyc
 test/data/*.json
 test/data/*.cdf
-test/data/*.nc
+test/data/*.nc.DS_Store
+.vscode/
+.idea/
+*.egg-info/
+__pycache__/
+.pytest_cache/

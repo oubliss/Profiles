@@ -89,7 +89,7 @@ class Profile_Set():
         """
         file_path = os.path.abspath(file_path)
         file_dir = os.path.dirname(file_path) + "/"
-        if(self._root_dir is ""):
+        if(self._root_dir == ""):
             self._root_dir = file_dir
         else:
             match_up_to = -1
@@ -190,7 +190,7 @@ class Profile_Set():
         """
 
         file_dir = os.path.dirname(file_path)
-        if(self._root_dir is ""):
+        if(self._root_dir == ""):
             self._root_dir = file_dir
         else:
             match_up_to = -1
@@ -300,7 +300,8 @@ class Profile_Set():
         self.ascent = bool(main_file.ascent)
         groups = main_file.groups
 
-        units.define('percent = 0.01*count = %')
+        if 'percent' not in units:
+            units.define('percent = 0.01*count = %')
 
         for profile_name in groups:
             profile_under_construction = Profile()

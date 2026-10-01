@@ -13,8 +13,10 @@ import os
 
 from .utils import event_IDs
 
-units.define('percent = 0.01*count = %')
-units.define('gPerKg = 0.001*count = g/Kg')
+if 'percent' not in units:
+    units.define('percent = 0.01*count = %')
+if 'gPerKg' not in units:
+    units.define('gPerKg = 0.001*count = g/Kg')
 
 
 class Raw_Profile():
