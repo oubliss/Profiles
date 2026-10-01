@@ -32,7 +32,8 @@ class Thermo_Profile():
             self._init2(*args, **kwargs)
 
     def _init2(self, temp_dict, resolution, file_path=None,
-               gridded_times=None, gridded_base=None, indices=(None, None),
+               gridded_times=None, gridded_centers=None, time_centers=None,
+               indices=(None, None),
                ascent=True, units=None, pos=None, meta=None, nc_level=None):
         """ Creates Thermo_Profile object from raw data at the specified
         resolution.
@@ -52,8 +53,9 @@ class Thermo_Profile():
            suffix .nc or .json
         :param np.Array<Datetime> gridded_times: times at which data points \
            should be calculated
-        :param np.Array<Quantity> gridded_base: base values corresponding to \
-           gridded_times
+        :param np.Array<Quantity> gridded_centers: the vertical coordinate at \
+           bin centres. One shorter than gridded_times, which holds the bin \
+           edges, and the length every regridded variable here will have.
         :param bool ascent: True if data should be processed for the ascending\
            leg of the flight, False if descending
         :param metpy.Units units: the unit registry created by Profile
@@ -81,6 +83,9 @@ class Thermo_Profile():
         except Exception:
             self.resolution = resolution
             self.gridded_times = gridded_times
+            # gridded_times are the N+1 bin edges used for averaging;
+            # self.time is the N bin-centre times the output is on.
+            self.time = time_centers
             self.rh = None
             self.pres = None
             self.temp = None
@@ -205,13 +210,13 @@ class Thermo_Profile():
         # grid alt and pres
         if (self.resolution.dimensionality ==
                 self._units.get_dimensionality('m')):
-            self.alt = gridded_base
+            self.alt = gridded_centers
             self.pres = utils.regrid_data(data=pres, data_times=time_pres,
                                           gridded_times=self.gridded_times,
                                           units=self._units)
         elif (self.resolution.dimensionality ==
               self._units.get_dimensionality('Pa')):
-            self.pres = gridded_base
+            self.pres = gridded_centers
             self.alt = utils.regrid_data(data=alts, data_times=time_pres,
                                          gridded_times=self.gridded_times,
                                          units=self._units)
@@ -237,8 +242,8 @@ class Thermo_Profile():
                                          units=self._units)
 
         else:
-            self.lat = np.full_like(self.gridded_times, -999.) * self._units('degrees')
-            self.lon = np.full_like(self.gridded_times, -999.) * self._units('degrees')
+            self.lat = np.full(len(self.time), -999.) * self._units('degrees')
+            self.lon = np.full(len(self.time), -999.) * self._units('degrees')
 
         """ 
         TB --  I don't think this is needed... 
@@ -282,7 +287,8 @@ class Thermo_Profile():
         self.theta = self.theta[:new_len]
         self.mixing_ratio = self.mixing_ratio[:new_len]
         self.q = self.q[:new_len]
-        self.gridded_times = self.gridded_times[:new_len]
+        self.gridded_times = self.gridded_times[:new_len + 1]
+        self.time = self.time[:new_len]
 
     def _save_netCDF(self, file_path):
         """ Save a NetCDF file to facilitate future processing if a .JSON was
@@ -325,21 +331,21 @@ class Thermo_Profile():
         main_file.createDimension("time", None)
         # TIME
         time_var = main_file.createVariable("time", "f8", ("time",))
-        time_var[:] = netCDF4.date2num(self.gridded_times,
+        time_var[:] = netCDF4.date2num(self.time,
                                        units='microseconds since \
                                        2010-01-01 00:00:00:00')
         time_var.units = 'microseconds since 2010-01-01 00:00:00:00'
 
         # Do base_time and time_offset like ARM
-        bt = abs((self.gridded_times[0] - dt.datetime(1970, 1, 1)).total_seconds())
+        bt = abs((self.time[0] - dt.datetime(1970, 1, 1)).total_seconds())
         bt_var = main_file.createVariable('base_time', 'i8')
         bt_var.setncattr('long_name', 'Base time in Epoch')
         bt_var.setncattr('ancillary_variables', 'time_offset')
         bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
         bt_var[:] = bt
 
-        to = netCDF4.date2num(self.gridded_times,
-                              units=f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to = netCDF4.date2num(self.time,
+                              units=f'seconds since {self.time[0]:%Y-%m-%d %H:%M:%S UTC}')
         to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
         to_var.setncattr('long_name', 'Time offset from base_time')
         to_var.setncattr('units', f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
@@ -426,9 +432,9 @@ class Thermo_Profile():
         self.q = np.array(main_file.variables["q"]) * \
             self._units.parse_expression(main_file.variables["q"].units)
         base_time = dt.datetime(2010, 1, 1, 0, 0, 0, 0)
-        self.gridded_times = []
+        self.time = []
         for i in range(len(main_file.variables["time"][:])):
-            self.gridded_times.append(base_time + dt.timedelta(microseconds=
+            self.time.append(base_time + dt.timedelta(microseconds=
                                                                int(main_file.variables
                                                                    ["time"][i])))
             # Hardcoded to microseconds since 2010-1-1

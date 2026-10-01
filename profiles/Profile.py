@@ -152,9 +152,13 @@ class Profile():
             base = self._pos['alt_MSL']
             base_time = self._pos['time']
 
-            # self.time/self.alt is the mean time/alt between two values in gridded_times
-            # whereas gridded_times/gridded_base are the edges to use in the averaging in
-            # get_wind_profile and get_thermo_profile
+            # Two grids come back from regrid_base and they are NOT the same
+            # length. gridded_times/gridded_base are the N+1 bin *edges* used
+            # to delimit the averaging; self.time/self.alt are the N bin
+            # *centres*, which is what every regridded variable lines up with.
+            # Handing the edges to Thermo_Profile/Wind_Profile as their
+            # vertical coordinate was a half-resolution low bias plus a
+            # trailing fill row - see gridded_centers below.
             self.time, self.alt, self.gridded_times, self.gridded_base \
                 = utils.regrid_base(base=base, base_times=base_time,
                                     new_res=self.resolution, ascent=ascent,
@@ -182,6 +186,14 @@ class Profile():
                                           gridded_times=self.gridded_times,
                                           units=self._units)
 
+
+        # The vertical coordinate at bin centres, whichever coordinate was
+        # chosen. This is what the gridded variables are aligned to.
+        if (self.resolution.dimensionality ==
+                self._units.get_dimensionality('m')):
+            self.gridded_centers = self.alt
+        else:
+            self.gridded_centers = self.pres
 
         self._base_start = self.gridded_base[0]
         try:
@@ -338,7 +350,8 @@ class Profile():
                 Wind_Profile(wind_data, self.resolution,
                              algorithm=algorithm,
                              gridded_times=self.gridded_times,
-                             gridded_base=self.gridded_base,
+                             gridded_centers=self.gridded_centers,
+                             time_centers=self.time,
                              indices=self.indices, ascent=self.ascent,
                              units=self._units, file_path=file_path,
                              pos=self._pos,
@@ -376,7 +389,8 @@ class Profile():
             self._thermo_profile = \
                 Thermo_Profile(thermo_data, self.resolution,
                                gridded_times=self.gridded_times,
-                               gridded_base=self.gridded_base,
+                               gridded_centers=self.gridded_centers,
+                               time_centers=self.time,
                                indices=self.indices, ascent=self.ascent,
                                units=self._units, file_path=file_path,
                                pos=self._pos,

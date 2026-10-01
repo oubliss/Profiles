@@ -24,8 +24,8 @@ PROFILE_START_HEIGHT = 350
 PROFILE_VARS = ('time', 'alt', 'pres', 'lat', 'lon', 'alt_MSL',
                 'gridded_times', 'gridded_base')
 THERMO_VARS = ('temp', 'rh', 'pres', 'alt', 'theta', 'T_d', 'mixing_ratio',
-               'q', 'temp_flags', 'rh_flags', 'gridded_times')
-WIND_VARS = ('speed', 'dir', 'u', 'v', 'alt', 'pres', 'gridded_times')
+               'q', 'temp_flags', 'rh_flags', 'time', 'gridded_times')
+WIND_VARS = ('speed', 'dir', 'u', 'v', 'alt', 'pres', 'time', 'gridded_times')
 
 
 def _to_array(value):
