@@ -105,8 +105,6 @@ class Raw_Profile():
             self._read_JSON(self.file_path, nc_level=nc_level)
             self.file_type = 'json'
 
-        if self.meta is not None:
-            scoop_id = self.meta.get("scoop_id")
 
 
     def apply_thermo_coeffs(self):
@@ -281,8 +279,8 @@ class Raw_Profile():
         to_return["pitch"] = self.rotation[4]
         to_return["yaw"] = self.rotation[5]
         to_return["pos_n"] = self.rotation[6]
-        to_return["pos_e"] = self.rotation[6]
-        to_return["pos_d"] = self.rotation[6]
+        to_return["pos_e"] = self.rotation[7]
+        to_return["pos_d"] = self.rotation[8]
         to_return["time"] = self.rotation[-1]
 
         to_return["alt"] = self.pres[3]
@@ -1046,7 +1044,7 @@ class Raw_Profile():
         if wind_list is not None:
             self.wind = tuple(wind_list)
         else:
-            self.events = None
+            self.wind = None
 
 
         if nc_level == 'low':
@@ -1192,10 +1190,10 @@ class Raw_Profile():
         rot_list[6] = np.array(rot_list[6]) * units.m
         # Estimated distance from origin (E component)
         rot_list.append(main_file["rotation"].variables["PE"])
-        rot_list[6] = np.array(rot_list[7]) * units.m
+        rot_list[7] = np.array(rot_list[7]) * units.m
         # Estimated distance from origin (Down component)
         rot_list.append(main_file["rotation"].variables["PD"])
-        rot_list[6] = np.array(rot_list[8]) * units.m
+        rot_list[8] = np.array(rot_list[8]) * units.m
         # time
         rot_list.append(netCDF4.num2date(main_file["rotation"].
                                          variables["time"][:],

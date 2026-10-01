@@ -85,7 +85,11 @@ class Profile():
         if raw_profile is not None:
             self._raw_profile = raw_profile
         else:
-            self._raw_profile = Raw_Profile(file_path, dev, scoop_id,
+            # scoop_id is not a Raw_Profile parameter; passing it
+            # positionally put it in the nc_level slot, which silently
+            # suppressed the a0 file and the coefficient application.
+            self._raw_profile = Raw_Profile(file_path, dev,
+                                            nc_level=nc_level,
                                             metadata=metadata, **kwargs)
         self._units = self._raw_profile.get_units()
         self._pos = self._raw_profile.pos_data()
@@ -344,7 +348,7 @@ class Profile():
 
             if len(self._wind_profile.gridded_times) > len(self.gridded_times):
                 new_len = len(self.gridded_times)
-                self._wind_profile.trucate_to(new_len)
+                self._wind_profile.truncate_to(new_len)
             elif len(self._wind_profile.gridded_times) < \
                     len(self.gridded_times):
                 new_len = len(self._wind_profile.gridded_times)
@@ -382,7 +386,7 @@ class Profile():
             if len(self._thermo_profile.gridded_times) > \
                     len(self.gridded_times):
                 new_len = len(self.gridded_times)
-                self._thermo_profile.trucate_to(new_len)
+                self._thermo_profile.truncate_to(new_len)
             elif len(self._thermo_profile.gridded_times) < \
                     len(self.gridded_times):
                 new_len = len(self._thermo_profile.gridded_times)

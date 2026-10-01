@@ -69,7 +69,7 @@ class Meta:
         if header_path is not None:
             self.read_file(header_path)
 
-        if header_path is not None:
+        if flight_path is not None:
             self.read_file(flight_path)
 
         if guid is not None:
