@@ -1,0 +1,21 @@
+Rh_corr(Rh,T) = p00 + p10*Rh + p01*T + p20*Rh^2 + p11*Rh*T + p02*T^2
+
+Measured data points inside the chamber used for surface fitting:
+Temperature: 10C, 22C, 35C
+Rel. Hum: 20, 40, 60, 70, 80, 85, 95(ish)
+
+Use this coefficients if NO correction was applied to built-in temperature sensor:
+	p00 =   19.9512  
+	p10 =   1.1893  
+	p01 =  -0.1269  
+	p20 =  -6.5933e-04  
+	p11 =  -6.2418e-05  
+	p02 =   1.6144e-04
+
+Use this coefficients if you have corrected built-in temperature sensor:
+	p00 =   20.1526  
+	p10 =   1.1894  
+	p01 =  -0.1282  
+	p20 =  -6.5933e-04  
+	p11 =  -6.2744e-05  
+	p02 =   1.6335e-04
