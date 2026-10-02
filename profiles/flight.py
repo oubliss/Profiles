@@ -13,6 +13,7 @@ from profiles.unit_registry import units  # shared pint registry
 import profiles.utils as utils
 import profiles.readers as readers
 import profiles.parsing as parsing
+from profiles.io import naming
 import profiles.calibration as calibration
 from profiles.retrievals import wind as wind_retrieval
 from profiles import schema
@@ -919,17 +920,13 @@ class FlightLog():
         :param string file_path: file name
         """
 
-        if '.nc' in file_path or '.cdf' in file_path:
-            file_name = file_path
-
-        elif self.meta is not None:
-            file_name = str(self.meta.get("location")).replace(' ', '') + \
-                        str(self.meta.get("platform_id")) + "CMT" + \
-                        ".a0." + self.meta.get("timestamp").replace("_", ".") + ".cdf"
-            file_name = os.path.join(os.path.dirname(file_path), file_name)
-
-        else:
-            file_name = self.file_path.replace('.json', '.nc').replace('.bin', '.nc')
+        file_name = naming.resolve(
+            file_path, self.meta, 'a0',
+            self.meta.get("timestamp").replace("_", ".") if self.meta else '',
+            resolution=None,
+            fallback=self.file_path.replace('.json', '.nc')
+                                   .replace('.bin', '.nc')
+                                   .replace('.BIN', '.nc'))
 
 
         main_file = netCDF4.Dataset(file_name, "w",

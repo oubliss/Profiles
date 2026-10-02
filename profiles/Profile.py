@@ -560,17 +560,11 @@ class Profile():
 
         :param string file_path: file name
         """
-        if '.nc' in file_path or '.cdf' in file_path:
-            file_name = file_path
-        elif self.meta is not None:
-            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
-                        str(self.meta.get("platform_id")) + "CMT" + \
-                        "thermo_" + self._ascent_filename_tag + ".c1." + \
-                        self.meta.get("timestamp").replace("_", ".") + ".cdf"
-            file_name = os.path.join(os.path.dirname(file_path), file_name)
-
-        else:
-            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+        file_name = profile_io.resolve(
+            file_path, self.meta, 'c1',
+            self.meta.get("timestamp").replace("_", ".") if self.meta else '',
+            resolution=self.resolution.magnitude,
+            tag='thermo_' + self._ascent_filename_tag)
 
 
         main_file = netCDF4.Dataset(file_name, "w",
@@ -646,7 +640,10 @@ class Profile():
         Td_var.units = str(self.T_d.units)
         # Q
         q_var = main_file.createVariable("q", "f8", ("time",))
-        q_var[:] = self.q.magnitude
+        # q comes back from MetPy as kg/kg and is labelled gPerKg, so it
+        # needs the same * 1e3 the combined c1 writer applies. Without it
+        # this file claimed g/kg while holding kg/kg - wrong by 1000.
+        q_var[:] = self.q.magnitude * 1e3
         q_var.units = str(self.q.units)
         # LAT
         lat_var = main_file.createVariable("lat", "f8", ("time",))
@@ -666,17 +663,11 @@ class Profile():
         :param string file_path: file name
         """
 
-        if '.nc' in file_path or '.cdf' in file_path:
-            file_name = file_path
-        elif self.meta is not None:
-            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
-                    str(self.meta.get("platform_id")) + "CMT" + \
-                    "wind_" + self._ascent_filename_tag + ".c1." + \
-                    self.meta.get("timestamp").replace("_", ".") + ".cdf"
-            file_name = os.path.join(os.path.dirname(file_path), file_name)
-
-        else:
-            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+        file_name = profile_io.resolve(
+            file_path, self.meta, 'c1',
+            self.meta.get("timestamp").replace("_", ".") if self.meta else '',
+            resolution=self.resolution.magnitude,
+            tag='wind_' + self._ascent_filename_tag)
 
 
         main_file = netCDF4.Dataset(file_name, "w",
@@ -747,16 +738,11 @@ class Profile():
         if file_path is None:
             file_path = self.file_path
 
-        if '.nc' in file_path or '.cdf' in file_path:
-            file_name = file_path
-        elif self.meta is not None:
-            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
-                        str(self.meta.get("platform_id")) + "CMT"  + self._ascent_filename_tag + ".c1." + \
-                        self.time[0].strftime("%Y%m%d.%H%M%S") + ".cdf"
-            file_name = os.path.join(os.path.dirname(file_path), file_name)
-
-        else:
-            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+        file_name = profile_io.resolve(
+            file_path, self.meta, 'c1',
+            self.time[0].strftime("%Y%m%d.%H%M%S"),
+            resolution=self.resolution.magnitude,
+            tag=self._ascent_filename_tag)
 
         if not (self._wind_computed or self._thermo_computed):
             print("No wind or thermo data to save; call compute_thermo() "
@@ -901,16 +887,11 @@ class Profile():
         if file_path is None:
             file_path = self.file_path
 
-        if '.nc' in file_path or '.cdf' in file_path:
-            file_name = file_path
-        elif self.meta is not None:
-            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
-                        str(self.meta.get("platform_id")) + "CMT" + self._ascent_filename_tag + ".c1." + \
-                        self.time[0].strftime("%Y%m%d.%H%M%S") + ".cdf"
-            file_name = os.path.join(os.path.dirname(file_path), file_name)
-
-        else:
-            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+        file_name = profile_io.resolve(
+            file_path, self.meta, 'c1',
+            self.time[0].strftime("%Y%m%d.%H%M%S"),
+            resolution=self.resolution.magnitude,
+            tag=self._ascent_filename_tag)
 
         if not (self._wind_computed or self._thermo_computed):
             print("No wind or thermo data to save; call compute_thermo() "

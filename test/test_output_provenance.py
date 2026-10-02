@@ -111,3 +111,63 @@ def test_thresholds_are_configurable(tmp_path):
     assert profile.qc_thresholds['temp'] == (5.0, 5.0)
     # A threshold that loose should reject nothing but the empty sensor.
     assert set(profile.temp_flags) <= {qc.GOOD, qc.EMPTY}
+
+
+class TestNaming:
+    """One function builds every output name; five writers used to."""
+
+    def test_explicit_path_always_wins(self):
+        from profiles.io import naming
+        assert naming.resolve('/tmp/x.cdf', None, 'c1', '') == '/tmp/x.cdf'
+        assert naming.resolve('/tmp/x.nc', None, 'c1', '') == '/tmp/x.nc'
+
+    def test_name_is_built_from_metadata(self):
+        from profiles.io import naming
+
+        class FakeMeta:
+            def get(self, key):
+                return {'location': 'Lake Thunderbird',
+                        'platform_id': 'N934UA'}[key]
+
+        name = naming.output_name(FakeMeta(), 'c1', '20210609.080023',
+                                  resolution=10, tag='Ascending')
+        assert name == 'LakeThunderbird10N934UACMTAscending.c1.20210609.080023.cdf'
+
+    def test_a0_omits_resolution_because_it_is_not_gridded(self):
+        from profiles.io import naming
+
+        class FakeMeta:
+            def get(self, key):
+                return {'location': 'KAEFS', 'platform_id': 'N934UA'}[key]
+
+        assert naming.output_name(FakeMeta(), 'a0', '20210609.080023') == \
+            'KAEFSN934UACMT.a0.20210609.080023.cdf'
+
+    def test_no_metadata_and_no_fallback_is_an_error(self):
+        from profiles.io import naming
+        with pytest.raises(IOError, match='specify a file name'):
+            naming.resolve('/tmp/flight.BIN', None, 'c1', '')
+
+    def test_fallback_is_used_when_offered(self):
+        from profiles.io import naming
+        assert naming.resolve('/tmp/f.BIN', None, 'a0', '',
+                              fallback='/tmp/f.nc') == '/tmp/f.nc'
+
+
+def test_specific_humidity_is_scaled_consistently(written, tmp_path):
+    """The thermo_ writer wrote kg/kg under a g/kg label; c1 did not."""
+    import netCDF4
+
+    profile, c1_path = written
+    thermo_path = tmp_path / 'thermo.cdf'
+    profile._save_thermo_netCDF(str(thermo_path))
+
+    with netCDF4.Dataset(c1_path) as combined, \
+            netCDF4.Dataset(thermo_path) as per_variable:
+        combined_q = combined.variables['q'][:]
+        per_variable_q = per_variable.variables['q'][:]
+        assert combined.variables['q'].units == per_variable.variables['q'].units
+        np.testing.assert_allclose(per_variable_q[:len(combined_q)],
+                                   combined_q, rtol=1e-12)
+        # ~16 g/kg, not ~0.016
+        assert 1.0 < float(np.nanmean(combined_q)) < 40.0

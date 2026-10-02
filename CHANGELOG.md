@@ -162,6 +162,16 @@ their mean and re-test, never going below two survivors.
   the branch selecting it fell through to `pass`.
 - Coefficient tables are indexed once at construction; `get_coefs` was doing
   a full DataFrame copy per sensor per profile.
+- **One function builds every output file name** (`profiles/io/naming.py`).
+  Five writers each built their own, with unintended differences: the
+  per-variable c1 names put the ascent tag in a different position from the
+  combined ones, and three of the five raised `IOError` without metadata
+  while `FlightLog` quietly derived a name from the input.
+- **`q` in `thermo_*` files was wrong by a factor of 1000.** MetPy returns
+  kg/kg and the code attached a `gPerKg` label without rescaling.
+  `Profile.save_netcdf` compensated with an explicit `* 1e3`; the
+  per-variable writer did not, so that file claimed g/kg while holding
+  kg/kg. Both now scale.
 
 ### Added
 
@@ -190,10 +200,6 @@ their mean and re-test, never going below two survivors.
   so a mostly-empty second c1 file gets written. `ProcessingConfig
   .min_levels` is a stopgap; a real fix needs a minimum profile depth in
   the detector, which changes which profiles get emitted.
-- `Thermo_Profile.q` carried kg/kg magnitudes labelled `gPerKg`.
-  `Profile.save_netcdf` compensated with `* 1e3` but the per-variable
-  writer did not, so `thermo_*` files are mislabelled by 1000. Unchanged
-  pending Stage 5's single writer.
 - `_read_csv` is still the original hand-written parser. It has no test
   coverage and no sample data in the repo, so it was left alone rather than
   migrated to the schema on faith.
