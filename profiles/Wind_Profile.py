@@ -6,6 +6,7 @@ import pandas as pd
 import datetime as dt
 import os
 import profiles.utils as utils
+from profiles.retrievals import wind as wind_retrieval
 import metpy.calc
 import netCDF4
 from copy import deepcopy, copy
@@ -43,7 +44,7 @@ class Wind_Profile():
            the profile
         :param bool ascent: is data from the ascending leg of the flight \
            processed? If not, False.
-        :param metpy.units units: the units defined by Raw_Profile
+        :param metpy.units units: the shared registry from profiles.unit_registry
         :param str file_path: the original file passed to the package
         :param Meta meta: the parent Profile's Meta object
         :param str nc_level: either 'low', or 'none'. This parameter \
@@ -111,15 +112,12 @@ class Wind_Profile():
                 wind_dict["speed_down"].units
             wind_dict["time"] = np.array(wind_dict["time"])[selection]
 
-        if algorithm == 'linear':
-            print("USING LINEAR WINDS")
-            direction, speed, time = self._calc_winds_linear(wind_dict)
-        elif algorithm == 'quadratic':
-            print("USING QUADRATIC WINDS")
-            direction, speed, time = self._calc_winds_quadratic(wind_dict)
-        elif algorithm == 'leso':
-            print("This wind algorithm isn't implmented")
-            return
+        if algorithm not in self.ALGORITHM_EQUATIONS:
+            raise ValueError(
+                f'unknown wind algorithm {algorithm!r}; available: '
+                f'{sorted(self.ALGORITHM_EQUATIONS)}')
+
+        direction, speed, time = self._calc_winds(wind_dict, algorithm)
 
         direction = direction % (2*np.pi)
 
@@ -203,107 +201,27 @@ class Wind_Profile():
         self.time = self.time[:new_len]
 
 
-    def _calc_winds_quadratic(self, wind_data):
-        # TODO account for moving platform
-        tail_num = self.tail_number
+    #: Maps the public algorithm name to the calibration equation its
+    #: coefficients are stored under in MasterCoefList.
+    ALGORITHM_EQUATIONS = {'linear': 'E1', 'quadratic': 'E5'}
 
-        # psi and az represent the copter's direction in spherical coordinates
-        psi = np.zeros(len(wind_data["roll"])) * self._units.rad
-        az = np.zeros(len(wind_data["roll"])) * self._units.rad
+    def _calc_winds(self, wind_data, algorithm):
+        """ Wind direction and speed from the airframe's tilt.
 
-        for i in range(len(wind_data["roll"])):
-            # croll is cos(roll), sroll is sin(roll)...
-            croll = np.cos(wind_data["roll"][i]).magnitude
-            sroll = np.sin(wind_data["roll"][i]).magnitude
-            cpitch = np.cos(wind_data["pitch"][i]).magnitude
-            spitch = np.sin(wind_data["pitch"][i]).magnitude
-            cyaw = np.cos(wind_data["yaw"][i]).magnitude
-            syaw = np.sin(wind_data["yaw"][i]).magnitude
-
-            Rx = np.array([[1, 0, 0],
-                            [0, croll, sroll],
-                            [0, -sroll, croll]])
-            Ry = np.array([[cpitch, 0, -spitch],
-                            [0, 1, 0],
-                            [spitch, 0, cpitch]])
-            Rz = np.array([[cyaw, -syaw, 0],
-                            [syaw, cyaw, 0],
-                            [0, 0, 1]])
-            R = Rz @ Ry @ Rx
-
-            psi[i] = np.arccos(R[2, 2])
-            az[i] = np.arctan2(R[1, 2], R[0, 2])
-
-        coefs = utils.coef_manager.get_coefs('Wind', tail_num, 'E5')
-        speed = float(coefs['A']) * (np.sqrt(np.tan(psi)).magnitude)**2. + float(coefs['B']) * np.sqrt(np.tan(psi)).magnitude
-
-        speed = speed * self._units.m / self._units.s
-        # Throw out negative speeds
-        speed[speed.magnitude < 0.] = np.nan
-
-        # Fix negative angles
-        az = az.to(self._units.deg)
-        iNeg = np.squeeze(np.where(az.magnitude < 0.))
-        az[iNeg] = az[iNeg] + 360. * self._units.deg
-
-        # az is the wind direction, speed is the wind speed
-        return (az, speed, wind_data["time"])
-
-
-    def _calc_winds_linear(self, wind_data):
-        """ Calculate wind direction, speed, u, and v. Currently, this only
-        works when the craft is HORIZONTALLY STATIONARY.
-        :param dict wind_data: dictionary from FlightLog.get_wind_data()
-        :param bool isCopter: True if rotor-wing, false if fixed-wing
-        :rtype: tuple<list>
-        :return: (direction, speed)
+        :param dict wind_data: from FlightLog.wind_data()
+        :param str algorithm: 'linear' or 'quadratic'
+        :rtype: tuple
+        :return: (direction, speed, times)
         """
+        equation_name = self.ALGORITHM_EQUATIONS[algorithm]
+        coefficients = utils.coef_manager.get_coefs(
+            'Wind', self.tail_number, equation_name)
 
-        # TODO account for moving platform
-        tail_num = self.tail_number
+        direction, speed = wind_retrieval.retrieve(
+            wind_data['roll'], wind_data['pitch'], wind_data['yaw'],
+            coefficients, equation_name)
 
-        # psi and az represent the copter's direction in spherical coordinates
-        psi = np.zeros(len(wind_data["roll"])) * self._units.rad
-        az = np.zeros(len(wind_data["roll"])) * self._units.rad
-
-        for i in range(len(wind_data["roll"])):
-            # croll is cos(roll), sroll is sin(roll)...
-            croll = np.cos(wind_data["roll"][i]).magnitude
-            sroll = np.sin(wind_data["roll"][i]).magnitude
-            cpitch = np.cos(wind_data["pitch"][i]).magnitude
-            spitch = np.sin(wind_data["pitch"][i]).magnitude
-            cyaw = np.cos(wind_data["yaw"][i]).magnitude
-            syaw = np.sin(wind_data["yaw"][i]).magnitude
-
-            Rx = np.array([[1, 0, 0],
-                            [0, croll, sroll],
-                            [0, -sroll, croll]])
-            Ry = np.array([[cpitch, 0, -spitch],
-                            [0, 1, 0],
-                            [spitch, 0, cpitch]])
-            Rz = np.array([[cyaw, -syaw, 0],
-                            [syaw, cyaw, 0],
-                            [0, 0, 1]])
-            R = Rz @ Ry @ Rx
-
-            psi[i] = np.arccos(R[2, 2])
-            az[i] = np.arctan2(R[1, 2], R[0, 2])
-
-        coefs = utils.coef_manager.get_coefs('Wind', tail_num, 'E1')
-        # print(coefs)
-        speed = float(coefs['A']) * np.sqrt(np.tan(psi)).magnitude + float(coefs['B'])
-
-        speed = speed * self._units.m / self._units.s
-        # Throw out negative speeds
-        speed[speed.magnitude < 0.] = np.nan
-
-        # Fix negative angles
-        az = az.to(self._units.deg)
-        iNeg = np.squeeze(np.where(az.magnitude < 0.))
-        az[iNeg] = az[iNeg] + 360. * self._units.deg
-
-        # az is the wind direction, speed is the wind speed
-        return (az, speed, wind_data["time"])
+        return direction, speed, wind_data['time']
 
     def _save_netCDF(self, file_path):
         """ Save a NetCDF file to facilitate future processing if a .JSON was

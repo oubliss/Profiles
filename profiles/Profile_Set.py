@@ -5,7 +5,7 @@ import os
 import netCDF4
 import datetime as dt
 import numpy as np
-from metpy.units import units
+from profiles.unit_registry import units
 from profiles.Profile import Profile
 from profiles.flight import FlightLog
 from profiles.Thermo_Profile import Thermo_Profile
@@ -299,9 +299,6 @@ class Profile_Set():
         self.res_units = main_file.res_units
         self.ascent = bool(main_file.ascent)
         groups = main_file.groups
-
-        if 'percent' not in units:
-            units.define('percent = 0.01*count = %')
 
         for profile_name in groups:
             profile_under_construction = Profile()

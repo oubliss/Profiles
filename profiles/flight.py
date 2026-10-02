@@ -8,20 +8,16 @@ import netCDF4
 import numpy as np
 import pandas as pd
 from datetime import datetime as dt
-from metpy.units import units  # this is a pint UnitRegistry
+from profiles.unit_registry import units  # shared pint registry
 import profiles.utils as utils
 import profiles.readers as readers
 import profiles.parsing as parsing
+import profiles.calibration as calibration
+from profiles.retrievals import wind as wind_retrieval
 from profiles import schema
 import os
 
 from .utils import event_IDs
-
-if 'percent' not in units:
-    units.define('percent = 0.01*count = %')
-if 'gPerKg' not in units:
-    units.define('gPerKg = 0.001*count = g/Kg')
-
 
 def _as_datetimes(values):
     """ numpy datetime64 back to Python datetimes, NaT to NaN.
@@ -146,105 +142,42 @@ class FlightLog():
 
 
     def apply_thermo_coeffs(self):
+        """ Calibrate every temperature and humidity sensor individually.
 
-        temp_dict = self.thermo_data()
+        Stores per-sensor arrays on self.calib_temp and self.calib_rh for
+        the a0 file. The gridded profile calibrates from the same functions.
+        """
+        thermo_data = self.thermo_data()
+        serial_numbers = thermo_data['serial_numbers']
 
-        temp = []
-        rh = []
+        self.calib_temp = calibration.calibrate_temperature(
+            thermo_data, serial_numbers)
+        self.calib_rh = calibration.calibrate_humidity(
+            thermo_data, serial_numbers)
 
-        temp_raw = []  # List of lists, each containing data from a sensor
+    def apply_wind_coeffs(self, equation_name='E1'):
+        """ Retrieve wind from airframe tilt over the whole flight.
 
-        # Fill temp_raw
-        use_resistance = False
-        use_temp = False
-        for key in temp_dict.keys():
-            if "resi" in key:
-                use_resistance = True
-                if use_temp:
-                    use_temp = False
-                    temp_raw = []
-                temp_raw.append(temp_dict[key].magnitude)
-            if "temp" in key and "_" not in key and not use_resistance:
-                use_temp = True
-                temp_raw.append(temp_dict[key].magnitude)
-
-        # Process resistance if needed
-        serial_numbers = temp_dict["serial_numbers"]
-        if use_resistance:
-            for i in range(len(temp_raw)):
-                temp_raw[i] = utils.temp_calib(temp_raw[i],
-                                               serial_numbers["imet" + str(i + 1)])
-
-        rh_raw = []
-        # Fill rh_raw
-        for key in temp_dict.keys():
-            # Ensure only humidity is processed here
-            if "rh" in key and "temp" not in key and "time" not in key:
-                rh_raw.append(temp_dict[key].magnitude)
-        for i in range(len(rh_raw)):
-            rh_raw[i] = utils.rh_calib(rh_raw[i], serial_numbers["rh" + str(i + 1)])
-
-
-        self.calib_temp = temp_raw
-        self.calib_rh = rh_raw
-
-    def apply_wind_coeffs(self):
-
+        :param str equation_name: calibration equation for this airframe
+        """
         wind_data = self.wind_data()
 
         try:
             if self.tail_number is None:
-                tail_num = utils.coef_manager.get_tail_n(wind_data['serial_numbers']['copterID'])
+                tail_number = utils.coef_manager.get_tail_n(
+                    wind_data['serial_numbers']['copterID'])
             else:
-                tail_num = self.tail_number
-
+                tail_number = self.tail_number
         except KeyError:
-            print("No CopterID found. Please specify a tail number upon Raw_Profile creation to calc winds (needed for CSV reads)")
+            print("No CopterID found. Please specify a tail number upon "
+                  "FlightLog creation to calc winds (needed for CSV reads)")
             return
 
-
-        # psi and az represent the copter's direction in spherical coordinates
-        psi = np.zeros(len(wind_data["roll"])) * units.rad
-        az = np.zeros(len(wind_data["roll"])) * units.rad
-
-        for i in range(len(wind_data["roll"])):
-            # croll is cos(roll), sroll is sin(roll)...
-            croll = np.cos(wind_data["roll"][i]).magnitude
-            sroll = np.sin(wind_data["roll"][i]).magnitude
-            cpitch = np.cos(wind_data["pitch"][i]).magnitude
-            spitch = np.sin(wind_data["pitch"][i]).magnitude
-            cyaw = np.cos(wind_data["yaw"][i]).magnitude
-            syaw = np.sin(wind_data["yaw"][i]).magnitude
-
-            Rx = np.array([[1, 0, 0],
-                            [0, croll, sroll],
-                            [0, -sroll, croll]])
-            Ry = np.array([[cpitch, 0, -spitch],
-                            [0, 1, 0],
-                            [spitch, 0, cpitch]])
-            Rz = np.array([[cyaw, -syaw, 0],
-                            [syaw, cyaw, 0],
-                            [0, 0, 1]])
-            R = Rz @ Ry @ Rx
-
-            psi[i] = np.arccos(R[2, 2])
-            az[i] = np.arctan2(R[1, 2], R[0, 2])
-
-        coefs = utils.coef_manager.get_coefs('Wind', tail_num, 'E1')
-        speed = float(coefs['A']) * np.sqrt(np.tan(psi)).magnitude + float(coefs['B'])
-
-        speed = speed * units.m / units.s
-        # Throw out negative speeds
-        speed[speed.magnitude < 0.] = np.nan
-
-        # Fix negative angles
-        az = az.to(units.deg)
-        iNeg = np.squeeze(np.where(az.magnitude < 0.))
-        az[iNeg] = az[iNeg] + 360. * units.deg
-
-        # az is the wind direction, speed is the wind speed
-        self.calib_speed = speed
-        self.calib_dir = az
+        coefficients = utils.coef_manager.get_coefs('Wind', tail_number,
+                                                    equation_name)
+        self.calib_dir, self.calib_speed = wind_retrieval.retrieve(
+            wind_data['roll'], wind_data['pitch'], wind_data['yaw'],
+            coefficients, equation_name)
 
     def pos_data(self):
         """ Gets data needed by the Profile constructor.

@@ -2,8 +2,10 @@
 Calculates and stores basic thermodynamic parameters
 """
 import datetime
-from metpy import calc
 import profiles.utils as utils
+import profiles.calibration as calibration
+import profiles.qc as qc_module
+from profiles.retrievals import thermo as thermo_retrieval
 import numpy as np
 import netCDF4
 import os
@@ -128,38 +130,10 @@ class Thermo_Profile():
         temp = []
         rh = []
 
-        temp_raw = []  # List of lists, each containing data from a sensor
-
-        # Fill temp_raw
-        use_resistance = False
-        use_temp = False
-        for key in temp_dict.keys():
-            if "resi" in key:
-                use_resistance = True
-                if use_temp:
-                    use_temp = False
-                    temp_raw = []
-                temp_raw.append(temp_dict[key].magnitude)
-            if "temp" in key and "_" not in key and not use_resistance:
-                use_temp = True
-                temp_raw.append(temp_dict[key].magnitude)
-
-        # Process resistance if needed
         serial_numbers = temp_dict["serial_numbers"]
-        if use_resistance:
-            for i in range(len(temp_raw)):
-                temp_raw[i] = utils.temp_calib(temp_raw[i],
-                                               serial_numbers["imet"+str(i+1)])
-        # End if-else blocks
+        temp_raw = calibration.calibrate_temperature(temp_dict, serial_numbers)
+        rh_raw = calibration.calibrate_humidity(temp_dict, serial_numbers)
 
-        rh_raw = []
-        # Fill rh_raw
-        for key in temp_dict.keys():
-            # Ensure only humidity is processed here
-            if "rh" in key and "temp" not in key and "time" not in key:
-                rh_raw.append(temp_dict[key].magnitude)
-        for i in range(len(rh_raw)):
-            rh_raw[i] = utils.rh_calib(rh_raw[i], serial_numbers["rh"+str(i+1)])
         alts = np.array(temp_dict["alt_pres"].magnitude)\
             * temp_dict["alt_pres"].units
         pres = np.array(temp_dict["pres"].magnitude)\
@@ -259,15 +233,11 @@ class Thermo_Profile():
         # self.alt = self.alt[0:minlen]
         # self.gridded_times = self.gridded_times[0:minlen]
 
-        # Calculate mixing ratio
-        self.mixing_ratio = calc.mixing_ratio_from_relative_humidity(
-                            self.pres, self.temp,
-                            np.divide(self.rh.magnitude, 100))
-
-        self.theta = calc.potential_temperature(self.pres, self.temp)
-        self.T_d = calc.dewpoint_from_relative_humidity(self.temp, self.rh)
-        self.q = calc.specific_humidity_from_mixing_ratio(self.mixing_ratio) * \
-                 units.gPerKg
+        derived = thermo_retrieval.derive(self.pres, self.temp, self.rh)
+        self.mixing_ratio = derived['mixing_ratio']
+        self.theta = derived['theta']
+        self.T_d = derived['T_d']
+        self.q = derived['q']
 
         if utils.writes_netcdf(nc_level):
             self._save_netCDF(file_path)
