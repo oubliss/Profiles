@@ -8,6 +8,8 @@ from datetime import datetime as dt
 from metpy.units import units  # this is a pint UnitRegistry
 import profiles.utils as utils
 import profiles.readers as readers
+import profiles.parsing as parsing
+from profiles import schema
 import os
 
 from .utils import event_IDs
@@ -16,6 +18,36 @@ if 'percent' not in units:
     units.define('percent = 0.01*count = %')
 if 'gPerKg' not in units:
     units.define('gPerKg = 0.001*count = g/Kg')
+
+
+def _as_datetimes(values):
+    """ numpy datetime64 back to Python datetimes, NaT to NaN.
+
+    Everything downstream - netCDF4.date2num, list().index() on a time
+    array, strftime - expects datetime objects, and a sample whose clock had
+    not yet been set from GPS was historically recorded as NaN rather than
+    dropped.
+
+    :param values: datetime64 array or sequence
+    :rtype: list
+    """
+    stamps = np.asarray(values, dtype='datetime64[us]')
+    return [np.nan if np.isnat(stamp) else stamp.astype(object)
+            for stamp in stamps]
+
+
+def _times(dataset):
+    """Time coordinate of a group Dataset as Python datetimes."""
+    dimension = f'{dataset.attrs["group"]}_time'
+    return _as_datetimes(dataset[dimension].values)
+
+
+def _quantity(dataset, name):
+    """A Dataset variable as a pint Quantity, using its recorded units."""
+    variable = dataset[name]
+    unit = variable.attrs.get('units')
+    values = np.asarray(variable.values)
+    return values * units.parse_expression(unit) if unit else values
 
 
 class Raw_Profile():
@@ -573,6 +605,12 @@ class Raw_Profile():
         Called by the constructor for both .BIN and .json input; the reader
         for each normalises to the same {"meta": ..., "data": ...} shape.
 
+        Parsing itself is driven by profiles.schema and produces one xarray
+        Dataset per group, kept on self.data. The positional tuples
+        (self.temp, self.rh, ...) are then derived from those Datasets so
+        that existing consumers keep working; they are the legacy interface
+        and will go away once those consumers read by name.
+
         :param iterable messages: normalised log messages, in file order
         :param str nc_level: either 'low', or 'none'. This parameter \
            is used when processing non-NetCDF files to determine which types \
@@ -581,492 +619,97 @@ class Raw_Profile():
            and Wind Profile, specify 'low'. For no NetCDF files, specify \
            'none'.
         """
+        parsed = parsing.parse(messages)
+        self.data = parsed['groups']
 
-        full_data = messages
+        self.serial_numbers.update(parsed['serial_numbers'])
 
-        """
-        Now full_data is a list of JSON element with 2 dictionaries each. If
-        we refer to one JSON element as "tweet", the structure can be described
-        as follows:
-
-        tweet["meta"] contains "timestamp" and "type".
-
-        tweet["data"] depends on tweet["meta"]["type"]. IMET, for example,
-        could contain
-            Temp1, float, 1, 286.2941589355469
-            Temp2, float, 1, 286.27020263671875
-            Temp3, float, 1, 286.0711364746094
-            Temp4, float, 1, 0.0
-            Time, int, 1, 60898080
-            Volt1, float, 1, 4441.3125
-            Volt2, float, 1, 4431.5625
-            Volt3, float, 1, 4429.875
-            Volt4, float, 1, 0.0
-
-        Next, we iterate through full_data and identify line containing the
-        types we want to keep. We then extract the data from each element
-        using a different code for each type.
-        """
-        temp_list = None
-        rh_list = None
-        pos_list = None
-        pres_list = None
-        rotation_list = None
-        event_list = None
-        message_list = None
-        wind_list = None
-        rpm_list = None
-        imu_list = None
-        # sensor_names will be dictionary of dictionaries formatted
-        # {
-        #     "valid_from": ,
-        #     "IMET": {name: index, name: index, ...},
-        #     "RHUM": {name: index, name: index, ...},
-        #     ...
-        # }
-        sensor_names = {}
-
-        for elem in full_data:
-
-            if elem["meta"]["type"] == "PARM" and "SYSID_THISMAV" in elem["data"]["Name"]:
-
-                self.serial_numbers['copterID'] = elem['data']['Value']
-
-            if elem["meta"]["type"] == "PARM" and "USER_SENSORS" in elem["data"]["Name"]:
-                index = int(elem['data']['Name'][-1])
-                if index <= 4:
-                    self.serial_numbers['imet' + str(index)] = int(elem['data']['Value'])
-                elif index > 4 and index <= 8:
-                    self.serial_numbers['rh' + str(index-4)] = int(elem['data']['Value'])
-
-            if self.baro == "BARO" and elem["meta"]["type"] == "BAR2":
-                # remove BARO structure and switch to using BAR2
-                self.baro = "BAR2"
-                pres_list = None
-                sensor_names["BARO"] = None
-
-            if elem["meta"]["type"] == "EV":
-
-                # Create list. The first slot will be the event ID, the second, the timestamp
-                if event_list is None:
-                    event_list =[[], []]
-
-                event_list[0].append(elem["data"]["Id"])
-                event_list[1].append(dt.utcfromtimestamp(elem["meta"]["timestamp"]))
-
-            if elem["meta"]["type"] == "MSG":
-
-                if message_list is None:
-                    message_list = [[], []]
-
-                message_list[0].append(elem["data"]["Message"])
-                message_list[1].append(dt.utcfromtimestamp(elem["meta"]["timestamp"]))
-
-            # IMET -> Temperature
-            if elem["meta"]["type"] == "IMET":
-
-                # First time only - setup temp_list
-                if temp_list is None:
-
-                    # Create array of lists with two lists per temperature
-                    # sensor reported in the data file - one for temperature
-                    # and one for resistance - plus one for times and one for
-                    # the scoop fan flag
-                    temp_list = [[] for x in range(10)]
-                    sensor_names["IMET"] = {}
-                    # Determine field names
-                    sensor_numbers = np.add(range(int((len(temp_list)-2) / 2)), 1)
-
-                    for num in sensor_numbers:
-                        sensor_names["IMET"]["T"+str(num)] = 2*num - 2
-                        sensor_names["IMET"]["R"+str(num)] = 2*num - 1
-                    sensor_names["IMET"]["Fan"] = -2
-                    sensor_names["IMET"]["Time"] = -1
-
-
-                # Read fields into temp_list, including Time and fan flag
-                for key, value in sensor_names["IMET"].items():
-                    try:
-                        if 'Time' in key:
-                            time = dt.utcfromtimestamp(elem["meta"]
-                                                       ["timestamp"])
-                            if time.year < 2000:
-                                raise KeyError("Time formatted incorrectly")
-                            else:
-                                temp_list[value].append(time)
-                        else:
-                            temp_list[value].append(elem["data"][key])
-                    except KeyError:
-                        # Any expected variable that was not logged will show
-                        # as a list of NaN.
-                        temp_list[value].append(np.nan)
-                    except IndexError:
-                        print("Error in Raw_Profile - 227")
-
-            # Humidity
-            elif elem["meta"]["type"] == "RHUM":
-
-                # First time only - setup rh_list and temp_rh_list
-                if rh_list is None:
-                    # Create array of lists with one list per RH
-                    # sensor reported in the data file, plus one for times
-                    rh_list = [[] for x in range(sum(('H' in s and
-                                                      'th' not in s)
-                               for s in elem["data"].keys()) * 2 + 1)]
-
-                    sensor_names["RHUM"] = {}
-                    # Determine field names
-                    sensor_numbers = np.add(range(int((len(rh_list)-1)/2)), 1)
-                    for num in sensor_numbers:
-                        sensor_names["RHUM"]["H"+str(num)] = 2*num - 2
-                        sensor_names["RHUM"]["T"+str(num)] = 2*num - 1
-                    sensor_names["RHUM"]["Time"] = -1
-
-                # Read fields into rh_list, including Time
-                for key, value in sensor_names["RHUM"].items():
-                    try:
-                        if 'Time' in key:
-                            time = dt.utcfromtimestamp(elem["meta"]
-                                                           ["timestamp"])
-                            if time.year < 2000:
-                                raise KeyError("Time formatted incorrectly")
-                            else:
-                                rh_list[value].append(time)
-                        elif 'H' in key:
-                            rh_list[value].append(elem["data"][key])
-                        elif 'T' in key:
-                            rh_list[value].append(elem["data"][key])
-                    except KeyError:
-                        rh_list[value].append(np.nan)
-
-            # POS
-            elif elem["meta"]["type"] == "POS":
-
-                # First time only - setup gps_list
-                if pos_list is None:
-                    # Create array of lists with one list per [lat, lon, alt,
-                    # time]
-                    pos_list = [[] for x in range(6)]
-
-                    sensor_names["POS"] = {}
-
-                    # Determine field names
-                    sensor_names["POS"]["Lat"] = 0
-                    sensor_names["POS"]["Lng"] = 1
-                    sensor_names["POS"]["Alt"] = 2
-                    sensor_names["POS"]["RelHomeAlt"] = 3
-                    sensor_names["POS"]["RelOriginAlt"] = 4
-                    sensor_names["POS"]["TimeUS"] = -1
-
-                # Read fields into gps_list, including TimeUS
-                for key, value in sensor_names["POS"].items():
-                    try:
-                        if 'Time' in key:
-                            time = dt.utcfromtimestamp(elem["meta"]
-                                                       ["timestamp"])
-                            if time.year < 2000:
-                                raise KeyError("Time formatted incorrectly")
-                            else:
-                                pos_list[value].append(time)
-                        else:
-                            if "Rel" in key:
-                                pos_list[value].append(elem["data"][key])
-                            elif 'Alt' in key:
-                                pos_list[value].append(elem["data"][key])
-                            else:
-                                pos_list[value].append(elem["data"][key])
-                    except KeyError:
-                        pos_list[value].append(np.nan)
-
-            # BARO or BAR2-> Pressure
-            elif elem["meta"]["type"] == self.baro:
-                # First time only - setup gps_list
-                if pres_list is None:
-                    # Create array of lists with one list per [pres, temp,
-                    # ground_temp, alt, time]
-                    pres_list = [[] for x in range(5)]
-
-                    sensor_names[self.baro] = {}
-
-                    # Determine field names
-                    sensor_names[self.baro]["Press"] = 0
-                    sensor_names[self.baro]["Temp"] = 1
-                    sensor_names[self.baro]["GndTemp"] = 2
-                    sensor_names[self.baro]["Alt"] = 3
-                    sensor_names[self.baro]["TimeUS"] = 4
-
-                # Read fields into pres_list, including TimeUS
-                for key, value in sensor_names[self.baro].items():
-                    try:
-                        if 'Time' in key:
-                            time = dt.utcfromtimestamp(elem["meta"]
-                                                       ["timestamp"])
-                            if time.year < 2000:
-                                raise KeyError("Time formatted incorrectly")
-                            else:
-                                pres_list[value].append(time)
-                        elif 'Alt' in key:
-                            pres_list[value].append(elem["data"][key])
-                        elif 'Temp' in key or 'GndTemp' in key:
-                            pres_list[value].append(elem["data"][key])
-                        elif 'Press' in key:
-                            pres_list[value].append(elem["data"][key])
-                        else:
-                            print('undefined BARO key: ' + key)
-                    except KeyError:
-                        pres_list[value].append(np.nan)
-
-            # NKF1 -> Rotation
-            elif (elem["meta"]["type"] == "NKF1") | (elem["meta"]["type"] == "XKF1"):
-
-                # First time only - setup gps_list
-                if rotation_list is None:
-                    # Create array of lists with one list per [ve, vn, vd,
-                    # roll, pitch, yaw, time]
-                    rotation_list = [[] for x in range(10)]
-
-                    sensor_names["NKF1"] = {}
-
-                    # Determine field names
-                    sensor_names["NKF1"]["VE"] = 0
-                    sensor_names["NKF1"]["VN"] = 1
-                    sensor_names["NKF1"]["VD"] = 2
-                    sensor_names["NKF1"]["Roll"] = 3
-                    sensor_names["NKF1"]["Pitch"] = 4
-                    sensor_names["NKF1"]["Yaw"] = 5
-                    sensor_names["NKF1"]["PN"] = 6
-                    sensor_names["NKF1"]["PE"] = 7
-                    sensor_names["NKF1"]["PD"] = 8
-                    sensor_names["NKF1"]["TimeUS"] = -1
-
-                # Read fields into rotation_list, including TimeUS
-                for key, value in sensor_names["NKF1"].items():
-                    try:
-                        if 'Time' in key:
-                            time = dt.utcfromtimestamp(elem["meta"]
-                                                       ["timestamp"])
-                            if time.year < 2000:
-                                raise KeyError("Time formatted incorrectly")
-                            else:
-                                rotation_list[value].append(time)
-                        elif 'VE' in key or 'VN' in key or 'VD' in key:
-                            rotation_list[value].append(elem["data"][key])
-                        elif 'PE' in key or 'PN' in key or 'PD' in key:
-                            rotation_list[value].append(elem["data"][key])
-                        else:  # Roll, pitch, yaw
-                            rotation_list[value].append(elem["data"][key])
-                    except KeyError:
-                        rotation_list[value].append(np.nan)
-
-            # Corrected WIND rotation matrix and the internal wind estimation from the copter
-            elif elem["meta"]["type"] == "WIND":
-                if wind_list is None:
-                    # Create array of lists with one list per [wdir, wspeed, R13, R23, R33, time]
-                    wind_list = [[] for x in range(6)]
-
-                    sensor_names["WIND"] = {}
-
-                    # Determine the field names
-                    sensor_names['WIND']['wdir'] = 0
-                    sensor_names['WIND']['wspeed'] = 1
-                    sensor_names['WIND']['R13'] = 2
-                    sensor_names['WIND']['R23'] = 3
-                    sensor_names['WIND']['R33'] = 4
-                    sensor_names['WIND']['TimeUS'] = -1
-
-
-
-                # Determine the field names
-                for key, value in sensor_names["WIND"].items():
-                    try:
-                        if 'Time' in key:
-                            time = dt.utcfromtimestamp(elem["meta"]["timestamp"])
-
-                            if time.year < 2000:
-                                raise KeyError("Time formatted incorrectly")
-                            else:
-                                wind_list[value].append(time)
-
-                        else:
-                            wind_list[value].append(elem["data"][key])
-                    except KeyError:
-                        wind_list[value].append(np.nan)
-
-            elif elem['meta']["type"] == "ESC":
-
-                if rpm_list is None:
-                    rpm_list = [[] for x in range(5)]
-
-                    sensor_names['ESC'] = {}
-
-                    # Can easily add more motors in the future, but will need to account for the case
-                    # where there are fewer motors that positions here. See TODO below
-                    sensor_names['ESC']['rpm1'] = 0
-                    sensor_names['ESC']['rpm2'] = 1
-                    sensor_names['ESC']['rpm3'] = 2
-                    sensor_names['ESC']['rpm4'] = 3
-                    sensor_names['ESC']['TimeUS'] = -1
-
-                # Determine the field names
-                for key, value in sensor_names["ESC"].items():
-
-                    if 'Time' in key:# and elem['data']['Instance'] == 0:
-                        # Since there are multiple times for each sequence of ESC messages, need to append a list of times
-                        # when the first message in the sequence of 4...
-                        rpm_list[value].append(elem['meta']["timestamp"])
-
-                    elif value == elem['data']['Instance'] % 4:  # NOTE: This will break for UAS without only 4 motors
-                        rpm_list[value].append(elem['data']["RPM"])
-
-            elif elem['meta']["type"] == "IMU":
-
-                if "I" in elem['data'].keys():  # Older files didn't have this, in the data. Instead had "IMU", "IMU2", ...
-                    if elem['data']['I'] != 0:
-                        continue
-
-                if imu_list is None:
-                    imu_list = [[] for x in range(7)]
-
-                    sensor_names['IMU'] = {}
-
-                    sensor_names['IMU']['GyrX'] = 0
-                    sensor_names['IMU']['GyrY'] = 1
-                    sensor_names['IMU']['GyrZ'] = 2
-                    sensor_names['IMU']['AccX'] = 3
-                    sensor_names['IMU']['AccY'] = 4
-                    sensor_names['IMU']['AccZ'] = 5
-                    sensor_names['IMU']['TimeUS'] = -1
-
-                # Determine the field names
-                for key, value in sensor_names["IMU"].items():
-
-                    if 'Time' in key:
-                        time = dt.utcfromtimestamp(elem["meta"]["timestamp"])
-                        imu_list[value].append(time)
-
-                    else:
-                        imu_list[value].append(elem['data'][key])
-
-
-        # A log that carries none of the message types we need - a
-        # zero-length or truncated file, or one from a vehicle without the
-        # thermodynamic payload - leaves these as None. Say so, rather than
-        # failing several frames deeper on len(None).
-        required = {'IMET (temperature)': temp_list, 'RHUM (humidity)': rh_list,
-                    'POS (position)': pos_list, f'{self.baro} (pressure)': pres_list,
-                    'NKF1/XKF1 (attitude)': rotation_list}
-        absent = sorted(name for name, value in required.items() if value is None)
-        if absent:
+        missing = [name for name in schema.REQUIRED_GROUPS
+                   if name not in self.data]
+        if missing:
             raise ValueError(
                 f'{self.file_path!r} contains no usable data: no '
-                + ', '.join(absent) + ' messages were found.')
+                + ', '.join(f'{name} messages' for name in missing)
+                + ' were found.')
 
-        #
-        # Add the units
-        #
+        self.baro = self.data['pres'].attrs['source_message_type']
 
-        # Temperature
-        for i in range(int((len(temp_list) - 1) / 2)):
-            try:
-                temp_list[2*i] = np.array(temp_list[2*i]) * units.K
-                temp_list[2*i + 1] = np.array(temp_list[2*i + 1]) * units.ohm
-            except IndexError:
-                # print("No data for sensor ", i + 1)
-                continue
-
-        # RH
-        for i in range(len(rh_list) - 1):
-            # rh
-            if i % 2 == 0:
-                rh_list[i] = np.array(rh_list[i]) * units.percent
-            # temp
-            else:
-                rh_list[i] = np.array(rh_list[i]) * units.kelvin
-
-        # POS
-        ground_alt = pos_list[2][0]  # This is the first in the file.
-        # Profiles have not yet been separated.
-        pos_list[0] = np.array(pos_list[0]) * units.deg  # lat
-        pos_list[1] = np.array(pos_list[1]) * units.deg  # lng
-        pos_list[2] = np.array(pos_list[2]) * units.m  # alt
-        pos_list[3] = np.array(pos_list[3]) * units.m  # relHomeAlt
-        pos_list[4] = np.array(pos_list[4]) * units.m  # relOrigAlt
-
-        # PRES
-        pres_list[0] = np.array(pres_list[0]) * units.Pa
-        pres_list[1] = np.array(pres_list[1]) * units.fahrenheit
-        pres_list[2] = np.array(pres_list[2]) * units.fahrenheit
-        pres_list[3] = np.array(np.add(pres_list[3], ground_alt)) * units.m
-
-        # ROTATION
-        for i in range(len(rotation_list) - 1):
-            if i < 3:
-                rotation_list[i] = np.array(rotation_list[i]) \
-                                            * units.m / units.s
-            elif i >= 6:
-                rotation_list[i] = np.array(rotation_list[i]) \
-                                   * units.m
-            else:
-                rotation_list[i] = np.array(rotation_list[i]) * units.deg
-
-        # RPMs
-        if rpm_list is not None:
-            num_motors = len(rpm_list) - 1
-
-            # Check to make sure there are equal numbers of ESC messages.
-            num_messages = np.unique([len(foo) for foo in rpm_list[0:num_motors]])
-
-            if len(num_messages) > 1:
-                # If the number of messages differ between the 4 motors, need to do some extra stuff
-                # Use the lower value
-                num_messages = np.min(num_messages)
-
-                # Truncate the arrays to the lower value
-                for i in range(num_motors):
-                    rpm_list[i] = rpm_list[i][:num_messages]
-
-                rpm_list[-1] = rpm_list[-1][:num_messages * num_motors]
-
-            else:
-                num_messages = num_messages[-1]
-
-            # Need to average the times between the motors
-            avg_times = [dt.utcfromtimestamp(np.nanmean(times, axis=0)) for times in np.reshape(rpm_list[-1], (num_messages, num_motors))]
-            rpm_list[-1] = avg_times
-
-            self.rpm = tuple(rpm_list)
-
-        # IMU List
-        if imu_list is not None:
-            self.imu = tuple(imu_list)
-
-        #
-        # Convert to tuple
-        #
-        self.temp = tuple(temp_list)
-        self.rh = tuple(rh_list)
-        self.pos = tuple(pos_list)
-        self.pres = tuple(pres_list)
-        self.rotation = tuple(rotation_list)
-        self.messages = tuple(message_list)
-
-        # Keeps compatability with pre Aug 2021 files
-        if event_list is not None:
-            self.events = tuple(event_list)
-        else:
-            self.events = None
-
-        # Keep compatability with files not containing these data
-        if wind_list is not None:
-            self.wind = tuple(wind_list)
-        else:
-            self.wind = None
-
+        self._build_legacy_tuples(parsed)
 
         if utils.writes_netcdf(nc_level):
             self.apply_thermo_coeffs()
             self.apply_wind_coeffs()
             self._save_netCDF(self.file_path)
+
+    def _build_legacy_tuples(self, parsed):
+        """ Populate the positional attributes from the parsed Datasets.
+
+        Interleaving (temp1, resi1, temp2, resi2, ...) and the exact slot
+        order are what thermo_data(), wind_data(), _save_netCDF() and
+        is_equal() still expect.
+        """
+        temp = self.data['temp']
+        self.temp = tuple(
+            [_quantity(temp, f'{kind}{n}')
+             for n in range(1, schema.N_SENSORS + 1)
+             for kind in ('temp', 'resi')]
+            + [np.asarray(temp['fan_flag'].values), _times(temp)])
+
+        rh = self.data['rh']
+        self.rh = tuple(
+            [_quantity(rh, f'{kind}{n}')
+             for n in range(1, schema.N_SENSORS + 1)
+             for kind in ('rh', 'temp_rh')]
+            + [_times(rh)])
+
+        pos = self.data['pos']
+        self.pos = tuple(
+            [_quantity(pos, name) for name in
+             ('lat', 'lon', 'alt_MSL', 'alt_rel_home', 'alt_rel_orig')]
+            + [_times(pos)])
+
+        # Barometric altitude is logged relative to the first MSL fix.
+        ground_alt = float(pos['alt_MSL'].values[0])
+        pres = self.data['pres']
+        self.pres = (_quantity(pres, 'pres'),
+                     _quantity(pres, 'temp'),
+                     _quantity(pres, 'ground_temp'),
+                     np.add(pres['alt'].values, ground_alt) * units.m,
+                     _times(pres))
+
+        rotation = self.data['rotation']
+        self.rotation = tuple(
+            [_quantity(rotation, name) for name in
+             ('speed_east', 'speed_north', 'speed_down', 'roll', 'pitch',
+              'yaw', 'pos_n', 'pos_e', 'pos_d')]
+            + [_times(rotation)])
+
+        # The groups below carry no units in the legacy interface.
+        if 'wind' in self.data:
+            wind = self.data['wind']
+            self.wind = tuple(
+                [np.asarray(wind[name].values) for name in
+                 ('wdir', 'wspeed', 'R13', 'R23', 'R33')] + [_times(wind)])
+        else:
+            self.wind = None
+
+        if 'imu' in self.data:
+            imu = self.data['imu']
+            self.imu = tuple(
+                [np.asarray(imu[name].values) for name in
+                 ('gyr_x', 'gyr_y', 'gyr_z', 'acc_x', 'acc_y', 'acc_z')]
+                + [_times(imu)])
+
+        events = parsed['events']
+        self.events = (events[0], _as_datetimes(events[1])) if events else None
+
+        texts = parsed['messages']
+        self.messages = ((texts[0], _as_datetimes(texts[1])) if texts
+                         else ([], []))
+
+        rpm = parsed['rpm']
+        if rpm is not None:
+            self.rpm = tuple(rpm[:-1] + [_as_datetimes(rpm[-1])])
 
     def _read_netCDF(self, file_path):
         """ Reads data from a NetCDF file. Called by the constructor.

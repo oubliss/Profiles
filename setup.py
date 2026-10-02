@@ -21,6 +21,7 @@ setuptools.setup(
         'matplotlib>=3.8',
         'pandas>=2.0',
         'scipy>=1.11',
+        'xarray>=2023.1',
         'requests',
         'cmocean',
         'numpy>=2.0'
