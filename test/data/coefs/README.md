@@ -24,3 +24,20 @@ are `E2`. Every lookup raises:
 The top-level table also disagrees with the live table on the coefficient
 values themselves (e.g. 62275 A = 1.00761568E-03 here vs 9.89E-04 live), which
 is the reproducibility gap that dated coefficient records are meant to close.
+
+## copterID 1 is ambiguous
+
+The live `copterID.csv` maps short ID 1 to **four** tail numbers:
+`FA3TANE3MF`, `FA3TANFWPA`, `FA3XEX7RKR` and `N944UA`. `get_tail_n` does
+`...values[0]`, so it silently returns whichever appears first in the file.
+
+That choice changes the answer. The FA3* aircraft carry wind E1
+A=3.76E+01 B=6.80E+00; N944UA carries A=3.28E+01 B=-4.50E+00. Retrieved wind
+speed therefore depends on row order in a CSV.
+
+Every OK3DM flight in this fixture logs `SYSID_THISMAV = 1`, so this is live
+on the current fleet, not historical. The fixture pins `FA3TANE3MF` because
+that is what the live table resolves to today and therefore what production
+output currently reflects. Resolving the ambiguity properly - by date, or by
+logging the tail number rather than the short ID - is Stage 5 work.
+

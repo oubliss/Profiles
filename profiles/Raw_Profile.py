@@ -1,14 +1,13 @@
 """
 Reads data file (JSON or netCDF) and stores the raw data
 """
-import json
 import netCDF4
 import numpy as np
 import pandas as pd
 from datetime import datetime as dt
 from metpy.units import units  # this is a pint UnitRegistry
-import profiles.mavlogdump_Profiles as mavlogdump_Profiles
 import profiles.utils as utils
+import profiles.readers as readers
 import os
 
 from .utils import event_IDs
@@ -85,25 +84,29 @@ class Raw_Profile():
         # WIND
         self.serial_numbers["wind"] = 0
 
-        if "json" in file_path or "JSON" in file_path:
-            # if os.path.basename(file_path)[:-5] + ".nc" in \
-            #    os.listdir(os.path.dirname(file_path)):
-            #     self._read_netCDF(file_path[:-5] + ".nc")
-            # else:
-            #     self._read_JSON(file_path, nc_level=nc_level)
+        extension = os.path.splitext(file_path)[1].lower()
+
+        if extension == '.json':
             self.file_type = 'json'
-            self._read_JSON(file_path, nc_level=nc_level)
-        elif ".csv" in file_path:
+            self._read_messages(readers.iter_json(file_path),
+                                nc_level=nc_level)
+        elif extension == '.bin':
+            # Read straight from the log. This used to dump the .BIN to a
+            # newline-delimited .json beside the original and re-read that;
+            # for an 18 MB OK3DM flight the intermediate was 104 MB.
+            self.file_type = 'bin'
+            self._read_messages(readers.iter_bin(file_path),
+                                nc_level=nc_level)
+        elif extension == '.csv':
             self.file_type = 'csv'
             self._read_csv(file_path)
-        elif ".nc" in file_path or ".NC" in file_path or ".cdf" in file_path:
+        elif extension in ('.nc', '.cdf'):
             self.file_type = 'nc'
             self._read_netCDF(file_path)
-        elif ".bin" in file_path or ".BIN" in file_path:
-            self.file_path = mavlogdump_Profiles.with_args(fmt="json",
-                                                      file_name=file_path)
-            self._read_JSON(self.file_path, nc_level=nc_level)
-            self.file_type = 'json'
+        else:
+            raise ValueError(
+                f'{file_path!r}: unrecognised extension {extension!r} '
+                f'(expected .bin, .json, .nc, .cdf or .csv)')
 
 
 
@@ -564,10 +567,13 @@ class Raw_Profile():
         self.rotation = tuple(rotation_list)
 
 
-    def _read_JSON(self, file_path, nc_level='low'):
-        """ Reads data from a .JSON file. Called by the constructor.
+    def _read_messages(self, messages, nc_level='low'):
+        """ Build the raw arrays from a stream of log messages.
 
-        :param string file_path: file name
+        Called by the constructor for both .BIN and .json input; the reader
+        for each normalises to the same {"meta": ..., "data": ...} shape.
+
+        :param iterable messages: normalised log messages, in file order
         :param str nc_level: either 'low', or 'none'. This parameter \
            is used when processing non-NetCDF files to determine which types \
            of NetCDF files will be generated. For individual files for each \
@@ -576,10 +582,7 @@ class Raw_Profile():
            'none'.
         """
 
-        # Read the file into a list which pandas can normalize and read
-        full_data = []
-        for line in open(file_path, 'r'):
-            full_data.append(json.loads(line))
+        full_data = messages
 
         """
         Now full_data is a list of JSON element with 2 dictionaries each. If
@@ -945,6 +948,19 @@ class Raw_Profile():
                         imu_list[value].append(elem['data'][key])
 
 
+        # A log that carries none of the message types we need - a
+        # zero-length or truncated file, or one from a vehicle without the
+        # thermodynamic payload - leaves these as None. Say so, rather than
+        # failing several frames deeper on len(None).
+        required = {'IMET (temperature)': temp_list, 'RHUM (humidity)': rh_list,
+                    'POS (position)': pos_list, f'{self.baro} (pressure)': pres_list,
+                    'NKF1/XKF1 (attitude)': rotation_list}
+        absent = sorted(name for name, value in required.items() if value is None)
+        if absent:
+            raise ValueError(
+                f'{self.file_path!r} contains no usable data: no '
+                + ', '.join(absent) + ' messages were found.')
+
         #
         # Add the units
         #
@@ -1050,7 +1066,7 @@ class Raw_Profile():
         if utils.writes_netcdf(nc_level):
             self.apply_thermo_coeffs()
             self.apply_wind_coeffs()
-            self._save_netCDF(file_path)
+            self._save_netCDF(self.file_path)
 
     def _read_netCDF(self, file_path):
         """ Reads data from a NetCDF file. Called by the constructor.
