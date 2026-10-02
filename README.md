@@ -4,49 +4,93 @@ This package was built to handle processing data primarily from the CopterSonde,
 
 See https://oucass.github.io/Profiles for detailed documentation of the API.
 
+## Quick start
+
+```python
+from profiles.processing import ProcessingConfig, process_flights, all_profiles
+
+config = ProcessingConfig(resolution=10, res_units='m', ascent=True,
+                          profile_start_height=340, min_levels=20)
+
+results = process_flights(['flight2859.BIN'], config)
+for profile in all_profiles(results):
+    profile.save_cfnetcdf('N934UA', terrain_elevation=340)
+```
+
+`.BIN` files are read directly. One `Profile` holds the whole gridded
+profile — temperature, humidity, wind and the derived quantities — so there
+are no separate thermo and wind objects to fetch.
+
+Files that fail are recorded against their path rather than aborting the
+batch:
+
+```python
+for result in results:
+    if not result.ok:
+        print(result.path, result.error)
+```
+
 ## Installation
 
-The package requires two git submodules to work properly. 
+##### 1. Clone and install
 
-The `dronelogbook` submodule acts to interface with DroneLogBook API to download CopterSonde data and collect metadata from each flight. You will also use this to sync the registry of CopterSondes scoops that are in use to a local directory `~/.wxuas`
-
-The `SensorCoefficients` submodule contains a CSV that is continually updated with information about calibrations and corrections for the sensors contained in each scoop.
-
-To install everything, use the following commands
-
-##### 1. Clone the Profiles package to the desired location
 ```
 git clone git@github.com:oucass/Profiles.git
-```
-
-##### 2. Initiate the submodules
-This will pull down the submodules that are currently compatible with the Profiles package
-```
 cd Profiles
-git submodules init
-git submodules update
+pip install -e .
 ```
 
-##### 3. Install the dronelogbook submodule and sync your system with DroneLogBook to test the API
-The install will also prompt you to input your DroneLogBook API key and configure the `~/.wxuas` directory
+##### 2. Point it at the coefficient tables
+
+The package needs `MasterCoefList.csv` and `copterID.csv`. It looks for them
+in this order:
+
+1. a directory passed to `TableCalibration(...)`
+2. the `WXUAS_DIR` environment variable
+3. `~/.wxuas`
+
 ```
-cd dronelogbook
-python setup.py install
-cd scripts
-python sync_dlb.py 
-cd ../../
+export WXUAS_DIR=/path/to/coefficients
 ```
 
-##### 4. Install the profiles package
+The `SensorCoefficients` submodule is the canonical source:
+
 ```
-python setup.py install
+git submodule init && git submodule update
+ln -s $PWD/SensorCoefficients/MasterCoefList.csv ~/.wxuas/MasterCoefList.csv
 ```
 
-##### 5. Softlink the MasterCoefList to `~/.wxuas/`
+##### 3. DroneLogBook (optional)
+
+Only needed to download flights and pull flight metadata. The package works
+without it.
+
 ```
-ln -s SensorCoefficients/MasterCoefList.csv ~/.wxuas/MasterCoefList.csv
+cd dronelogbook && pip install -e . && cd ..
+python dronelogbook/scripts/sync_dlb.py
 ```
 
+## Processing levels
+
+| level | what it is |
+|---|---|
+| a0 | every parsed message at native rate, no QC |
+| b1 | calibrated and QC-flagged, still native rate |
+| c1 | gridded profile, with QC flags and coefficient provenance |
+
+c1 files record which coefficients produced them, the QC thresholds in
+force, the coefficient table's git revision, and per-sensor QC flags as CF
+`flag_values` / `flag_meanings`.
+
+## Tests
+
+```
+pip install -e '.[test]'
+pytest
+```
+
+The suite is hermetic: it uses `test/data/coefs` rather than `~/.wxuas` and
+makes no network calls.
 
 ### References:
 
