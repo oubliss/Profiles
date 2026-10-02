@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from profiles.unit_registry import units
 import profiles.utils as utils
 import profiles.qc as qc
+from profiles import io as profile_io
 import profiles.calibration as calibration
 import metpy.calc
 import warnings
@@ -182,6 +183,11 @@ class Profile():
             self.indices = (indices[1], indices[2])
         self._wind_computed = False
         self._thermo_computed = False
+        self.qc_thresholds = dict(self.DEFAULT_QC_THRESHOLDS)
+        #: Coefficient rows actually applied, recorded for the output.
+        self.calibration_record = {}
+        #: A bias correction applied on top, if any.
+        self.bias_correction = None
         self.dev = dev  # TODO this is not used
         self.resolution = resolution * self._units.parse_expression(res_units)
         self.ascent = ascent
@@ -383,10 +389,10 @@ class Profile():
                   "compute_thermo and compute_wind before trying "
                   "again.")
 
-    #: QC thresholds: (max spread of sensor means, max spread of sensor
-    #: standard deviations), in each variable's own units.
-    #: TODO move into a config object - Stage 5.
-    QC_THRESHOLDS = {'temp': (0.25, 0.1), 'rh': (0.4, 0.2)}
+    #: Default QC thresholds: (max spread of sensor means, max spread of
+    #: sensor standard deviations), in each variable's own units. Override
+    #: per-Profile via qc_thresholds, or for a batch via ProcessingConfig.
+    DEFAULT_QC_THRESHOLDS = {'temp': (0.25, 0.1), 'rh': (0.4, 0.2)}
 
     def _trim(self, data, selectors):
         """ Restrict a data dict to this profile's time bounds.
@@ -455,11 +461,12 @@ class Profile():
         data = self._trim(self._thermo_data, _THERMO_TIME_BASES)
         serial_numbers = data['serial_numbers']
 
-        temp_raw = calibration.calibrate_temperature(data, serial_numbers)
+        temp_raw = calibration.calibrate_temperature(
+            data, serial_numbers, record=self.calibration_record)
         rh_raw = calibration.calibrate_humidity(data, serial_numbers)
 
-        self.temp_flags = qc.qc(temp_raw, *self.QC_THRESHOLDS['temp'])
-        self.rh_flags = qc.qc(rh_raw, *self.QC_THRESHOLDS['rh'])
+        self.temp_flags = qc.qc(temp_raw, *self.qc_thresholds['temp'])
+        self.rh_flags = qc.qc(rh_raw, *self.qc_thresholds['rh'])
 
         temp = self._average_ensemble(temp_raw, self.temp_flags) \
             * self._units.kelvin
@@ -502,6 +509,7 @@ class Profile():
         equation_name = wind_retrieval.ALGORITHM_EQUATIONS[algorithm]
         coefficients = utils.coef_manager.get_coefs(
             'Wind', self.tail_number, equation_name)
+        self.calibration_record['wind'] = coefficients
 
         direction, speed = wind_retrieval.retrieve(
             data['roll'], data['pitch'], data['yaw'],
@@ -770,6 +778,11 @@ class Profile():
         
         main_file.setncattr('datafile_created_on_date', datetime.utcnow().isoformat())
         main_file.setncattr('datafile_created_on_machine',  os.uname().nodename)
+        main_file.setncattr('processing_level', 'c1')
+
+        # Which coefficients, which thresholds, which table revision.
+        for name, value in profile_io.provenance_attributes(self).items():
+            main_file.setncattr(name, value)
 
         main_file.setncattr("reference1", "Segales, A. R., B. R. Greene, T. M. Bell, W. Doyle, J. J. Martin, "
                                           "E. A. Pillar-Little, and P. B. Chilson, 2020: The CopterSonde: an insight"
@@ -876,6 +889,8 @@ class Profile():
             v_var.units = str(self.v.units)
             v_var.long_name = "northward wind component"
 
+        profile_io.write_qc_variables(main_file, self)
+
         # Close the netCDF file
         main_file.close()
 
@@ -918,6 +933,9 @@ class Profile():
 
         main_file.setncattr('datafile_created_on_date', datetime.utcnow().isoformat())
         main_file.setncattr('datafile_created_on_machine', os.uname().nodename)
+
+        for name, value in profile_io.provenance_attributes(self).items():
+            main_file.setncattr(name, value)
 
         main_file.setncattr("Reference1", "Segales, A. R., B. R. Greene, T. M. Bell, W. Doyle, J. J. Martin, "
                                           "E. A. Pillar-Little, and P. B. Chilson, 2020: The CopterSonde: an insight"
@@ -1041,6 +1059,8 @@ class Profile():
             spd_var.units = str(self.speed.units)
             spd_var.standard_name = "wind_speed"
             spd_var.long_name = "Wind speed"
+
+        profile_io.write_qc_variables(main_file, self)
             # # U
             # u_var = main_file.createVariable("wind_u", "f8", ("time",))
             # u_var[:] = self.u.magnitude

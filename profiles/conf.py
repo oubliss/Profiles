@@ -1,16 +1,25 @@
-from types import SimpleNamespace
-import os
+"""
+Deprecated. Use profiles.config, or set $WXUAS_DIR.
 
-### Set up coef_info for Coef_Manager
+Configuration used to live here, inside the package, so changing it meant
+editing installed source and every machine drifted. This module remains
+because scripts and test suites repoint coef_info.FILE_PATH at runtime, and
+profiles.config still honours that when it is set.
+"""
+import os
+import warnings
+from types import SimpleNamespace
+
+warnings.warn(
+    'profiles.conf is deprecated; set the WXUAS_DIR environment variable or '
+    'pass a directory to TableCalibration(). See profiles.config.',
+    DeprecationWarning, stacklevel=2)
 
 wxuas_dir = os.path.join(os.path.expanduser("~"), ".wxuas")
 
-
-coef_info = SimpleNamespace(USE_AZURE=None, AZURE_CONNECTION_STRING=None, FILE_PATH=None)
-# If you do not use Azure, you MUST use a local coefs folder. See oucass.github.io/Profiles/coefs.html for instructions 
-coef_info.USE_AZURE="NO"
-# If you are using Azure, retrieve the connection strings from your portal.
-coef_info.AZURE_CONNECTION_STRING="***REMOVED***"
-# If you are NOT using Azure, put the path to the coefs folder here
-coef_info.FILE_PATH=wxuas_dir
-
+#: Legacy configuration namespace. FILE_PATH is still read by
+#: profiles.config.coefficient_dir and still takes precedence when set.
+#: USE_AZURE and AZURE_CONNECTION_STRING are ignored - the Azure backend
+#: was entirely commented out and has been removed.
+coef_info = SimpleNamespace(USE_AZURE="NO", AZURE_CONNECTION_STRING=None,
+                            FILE_PATH=None)

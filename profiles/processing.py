@@ -48,6 +48,12 @@ class ProcessingConfig:
     tail_number: Optional[str] = None
     wind_algorithm: str = 'linear'
     min_levels: int = 0
+    #: Per-variable (max spread of sensor means, max spread of sensor
+    #: standard deviations). None keeps Profile.DEFAULT_QC_THRESHOLDS.
+    qc_thresholds: Optional[dict] = None
+    #: Name of a registered bias correction to record against the output,
+    #: or None. Applying one is still opt-in - see profiles/bias.py.
+    bias_correction: Optional[str] = None
 
 
 @dataclass
@@ -86,13 +92,21 @@ def profiles_from_flight(path, config, metadata=None, base_start=None,
 
     profiles = []
     for number in range(1, len(legs) + 1):
-        profiles.append(Profile(
+        profile = Profile(
             path, config.resolution, config.res_units, number,
             ascent=config.ascent, dev=config.dev,
             confirm_bounds=config.confirm_bounds, index_list=legs,
             raw_profile=flight,
             profile_start_height=config.profile_start_height,
-            nc_level=config.nc_level, base_start=base_start))
+            nc_level=config.nc_level, base_start=base_start)
+
+        if config.qc_thresholds:
+            profile.qc_thresholds.update(config.qc_thresholds)
+        if config.bias_correction:
+            from profiles import bias
+            profile.bias_correction = bias.get(config.bias_correction)
+
+        profiles.append(profile)
 
     return profiles
 

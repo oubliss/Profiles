@@ -28,7 +28,7 @@ def _sensor_series(thermo_data, prefix):
     return series
 
 
-def calibrate_temperature(thermo_data, serial_numbers):
+def calibrate_temperature(thermo_data, serial_numbers, record=None):
     """ Per-sensor temperature in K.
 
     Resistance is preferred where the log carries it, because the
@@ -38,15 +38,31 @@ def calibrate_temperature(thermo_data, serial_numbers):
 
     :param dict thermo_data: as returned by FlightLog.thermo_data()
     :param dict serial_numbers: sensor serials, 0 where unknown
+    :param dict record: if given, the coefficient row used for each sensor
+       is stored here under 'imet<n>', for output provenance
     :rtype: list[np.ndarray]
     """
     resistances = _sensor_series(thermo_data, 'resi')
 
-    if resistances:
-        return [utils.temp_calib(values, serial_numbers[f'imet{i + 1}'])
-                for i, values in enumerate(resistances)]
+    if not resistances:
+        if record is not None:
+            record['temperature_source'] = 'logged (no resistances present)'
+        return _sensor_series(thermo_data, 'temp')
 
-    return _sensor_series(thermo_data, 'temp')
+    if record is not None:
+        record['temperature_source'] = 'Steinhart-Hart from logged resistance'
+
+    calibrated = []
+    for i, values in enumerate(resistances):
+        serial = serial_numbers[f'imet{i + 1}']
+        calibrated.append(utils.temp_calib(values, serial))
+        if record is not None:
+            try:
+                record[f'imet{i + 1}'] = utils.get_coef_manager().get_coefs(
+                    'Imet', serial)
+            except Exception as exc:          # provenance must never break
+                record[f'imet{i + 1}'] = {'error': str(exc)}
+    return calibrated
 
 
 def calibrate_humidity(thermo_data, serial_numbers):

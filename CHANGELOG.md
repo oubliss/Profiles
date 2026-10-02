@@ -128,6 +128,41 @@ their mean and re-test, never going below two survivors.
   `None`, so every Profile compared unequal to every other including
   itself. Full comparison set plus `__hash__` now.
 
+- **Coefficient rows can carry `ValidFrom`/`ValidTo`** and are selected by
+  flight date. Undated rows stay valid at all times, so existing tables work
+  untouched. Recalibrating a sensor no longer forces a choice between
+  destroying history and breaking every lookup.
+- **Ambiguity is reported.** Duplicate coefficient rows raise
+  `AmbiguousCoefficients` listing each candidate and its validity window.
+  `get_tail_n` still returns the first matching row — so nothing changes
+  numerically — but warns once per ID naming every candidate.
+- **`CalibrationSource` has two real implementations.** `TableCalibration`
+  for flights that logged sensor serials; `OnboardCalibration` for current
+  firmware, which refuses `Imet`/`RH` table lookups rather than silently
+  applying generic coefficients over the aircraft's own calibration. Wind
+  stays a table lookup. `source_for_flight()` chooses from the log.
+- **Bias corrections are a separate versioned layer** (`profiles/bias.py`).
+  Both lab corrections are MATLAB surface fits, so one evaluator covers
+  them: `pij` multiplies `rh**i * temp**j`. Each records its source and
+  fitted range and reports extrapolation. **None is applied by default.**
+- **Output records what produced it**: per-sensor coefficients and equation,
+  how temperature was derived, wind coefficients, tail number, QC
+  thresholds, the coefficient directory and its git revision, processing
+  version and level, and any bias correction's full coefficient set.
+- **QC flags reach the published c1 file** as CF-conventional `temp_qc` /
+  `rh_qc` variables on a `sensor` dimension, with `flag_values` and
+  `flag_meanings`. They previously existed only as group attributes on the
+  `thermo_` intermediate and were dropped from c1 entirely.
+- **QC thresholds are configurable** via `ProcessingConfig.qc_thresholds`
+  instead of being literals with a `# TODO read these from file`.
+- Configuration moved to `profiles/config.py`: explicit path → `$WXUAS_DIR`
+  → `~/.wxuas`. `profiles.conf` still works, still takes precedence when
+  set, and now warns.
+- The Azure coefficient backend is deleted. Every line was commented out and
+  the branch selecting it fell through to `pass`.
+- Coefficient tables are indexed once at construction; `get_coefs` was doing
+  a full DataFrame copy per sensor per profile.
+
 ### Added
 
 - `test/` is a real suite: baseline characterization snapshots, grid
