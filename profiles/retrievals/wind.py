@@ -23,6 +23,9 @@ from profiles.unit_registry import units
 #: call site hardcoding 'E1' or 'E5' and assuming the shape.
 EQUATIONS = {}
 
+#: Public algorithm name -> the Equation its coefficients are stored under.
+ALGORITHM_EQUATIONS = {'linear': 'E1', 'quadratic': 'E5'}
+
 
 def equation(name):
     """Register a calibration equation under its MasterCoefList name."""

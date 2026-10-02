@@ -30,7 +30,9 @@ def processed(tmp_path_factory):
         confirm_bounds=False, nc_level=None,
         profile_start_height=PROFILE_START_HEIGHT)
     profile_set.add_all_profiles(str(bin_path))
-    return [(p, p.get_thermo_profile(), p.get_wind_profile())
+    # Thermo and wind now live on the Profile itself; the triple is kept
+    # so the per-group assertions below still read clearly.
+    return [(p, p.compute_thermo(), p.compute_wind())
             for p in profile_set.profiles]
 
 
@@ -97,10 +99,12 @@ def test_saved_netcdf_has_no_fill_row(processed, tmp_path):
     """
     import netCDF4
 
-    profile, thermo, wind = processed[0]
-    for label, obj in (('thermo', thermo), ('wind', wind)):
+    profile, _, _ = processed[0]
+    writers = {'thermo': profile._save_thermo_netCDF,
+               'wind': profile._save_wind_netCDF}
+    for label, write in writers.items():
         path = tmp_path / f'{label}.cdf'
-        obj._save_netCDF(str(path))
+        write(str(path))
 
         with netCDF4.Dataset(path) as handle:
             n_time = len(handle.dimensions['time'])

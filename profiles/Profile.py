@@ -3,18 +3,68 @@
 Manages data from a single flight or profile
 """
 from datetime import datetime, timedelta
-from metpy.units import units
+from profiles.unit_registry import units
 import profiles.utils as utils
+import profiles.qc as qc
+import profiles.calibration as calibration
+import metpy.calc
+import warnings
+from profiles.retrievals import thermo as thermo_retrieval
+from profiles.retrievals import wind as wind_retrieval
 import profiles
 import sys
 import os
 from profiles.flight import FlightLog
-from profiles.Thermo_Profile import Thermo_Profile
-from profiles.Wind_Profile import Wind_Profile
 from profiles.Coef_Manager import Coef_Manager
 from copy import deepcopy, copy
 import numpy as np
 import netCDF4
+
+
+#: Which time coordinate each thermodynamic variable is sampled on.
+#: Fragments are tested in order, so the more specific ones come first:
+#: "temp_rh1" must land on the humidity clock, not the temperature one.
+#: fan_flag is deliberately absent - the original left it untrimmed, and
+#: nothing downstream of the trim reads it.
+_THERMO_TIME_BASES = {
+    'resi': 'time_temp',
+    'temp_rh': 'time_rh',
+    'temp_pres': 'time_pres',
+    'alt_pres': 'time_pres',
+    'pres': 'time_pres',
+    'rh': 'time_rh',
+    'temp': 'time_temp',
+}
+
+#: Same for wind. Only the attitude and velocity series were ever trimmed;
+#: pressure and altitude come off the Profile, which has already gridded
+#: them, so they pass through.
+_WIND_TIME_BASES = {
+    'roll': 'time', 'pitch': 'time', 'yaw': 'time',
+    'speed_east': 'time', 'speed_north': 'time', 'speed_down': 'time',
+}
+
+
+def _time_base_for(key, selectors):
+    """ Which time array a variable is sampled against, or None to pass through.
+
+    A time array is itself trimmed, by its own mask - that is what keeps
+    each series the same length as the clock it is indexed by.
+
+    :param str key: variable name
+    :param dict selectors: fragment -> time key, most specific first
+    :rtype: str or None
+    """
+    if key in set(selectors.values()):
+        return key
+
+    if 'time' in key or key in ('serial_numbers', 'units'):
+        return None
+
+    for fragment, time_key in selectors.items():
+        if fragment in key:
+            return time_key
+    return None
 
 
 class Profile():
@@ -130,8 +180,8 @@ class Profile():
             self.indices = (indices[0], indices[1])
         else:
             self.indices = (indices[1], indices[2])
-        self._wind_profile = None
-        self._thermo_profile = None
+        self._wind_computed = False
+        self._thermo_computed = False
         self.dev = dev  # TODO this is not used
         self.resolution = resolution * self._units.parse_expression(res_units)
         self.ascent = ascent
@@ -316,102 +366,374 @@ class Profile():
             return self.__getattribute__(varname)
         except AttributeError:
             pass
-        if self._thermo_profile is not None:
+        if self._thermo_computed:
             try:
-                return self._thermo_profile.__getattribute__(varname)
+                return self.__getattribute__(varname)
             except AttributeError:
                 pass
-        if self._wind_profile is not None:
+        if self._wind_computed:
             try:
-                return self._wind_profile.__getattribute__(varname)
+                return self.__getattribute__(varname)
             except AttributeError:
                 pass
         try:
             return self._raw_profile.__getattribute__(varname)
         except AttributeError:
             print("The requested variable " + varname + " does not exist. Call "
-                  "get_thermo_profile and get_wind_profile before trying "
+                  "compute_thermo and compute_wind before trying "
                   "again.")
 
-    def get_wind_profile(self, file_path=None, algorithm='linear'):
-        """ If a Wind_Profile object does not already exist, it is created when
-        this method is called.
+    #: QC thresholds: (max spread of sensor means, max spread of sensor
+    #: standard deviations), in each variable's own units.
+    #: TODO move into a config object - Stage 5.
+    QC_THRESHOLDS = {'temp': (0.25, 0.1), 'rh': (0.4, 0.2)}
 
-        :return: the Wind_Profile object
-        :rtype: Wind_Profile
+    def _trim(self, data, selectors):
+        """ Restrict a data dict to this profile's time bounds.
+
+        Returns a new dict. The old Thermo_Profile and Wind_Profile trimmed
+        the caller's dictionary in place, so constructing either one
+        silently shortened Profile._thermo_data / _wind_data from 7286
+        samples to 4050.
+
+        :param dict data: keys to arrays, as from FlightLog.thermo_data()
+        :param dict selectors: variable-name predicate -> time key, deciding
+           which time base each variable is sampled on
+        :rtype: dict
         """
+        if self.indices[0] is None:
+            return dict(data)
 
-        if file_path is None:
-            file_path = self.file_path
+        masks = {}
+        for time_key in set(selectors.values()):
+            stamps = np.array(data[time_key])
+            masks[time_key] = np.where(stamps > self.indices[0],
+                                       stamps < self.indices[1], False)
 
-        if self._wind_profile is None:
-            wind_data = self._wind_data
-            self._wind_profile = \
-                Wind_Profile(wind_data, self.resolution,
-                             algorithm=algorithm,
-                             gridded_times=self.gridded_times,
-                             gridded_centers=self.gridded_centers,
-                             time_centers=self.time,
-                             indices=self.indices, ascent=self.ascent,
-                             units=self._units, file_path=file_path,
-                             pos=self._pos,
-                             meta=self.meta,
-                             nc_level=self._nc_level,
-                             tail_number=self.tail_number)
+        trimmed = {}
+        for key, value in data.items():
+            time_key = _time_base_for(key, selectors)
+            if time_key is None:
+                trimmed[key] = value
+                continue
 
-            if len(self._wind_profile.gridded_times) > len(self.gridded_times):
-                new_len = len(self.gridded_times)
-                self._wind_profile.truncate_to(new_len)
-            elif len(self._wind_profile.gridded_times) < \
-                    len(self.gridded_times):
-                new_len = len(self._wind_profile.gridded_times)
-                self.gridded_times = self.gridded_times[:new_len]
-                self.gridded_base = self.gridded_base[:new_len]
+            keep = np.where(masks[time_key])
+            if hasattr(value, 'magnitude'):
+                trimmed[key] = value.magnitude[keep] * value.units
+            else:
+                trimmed[key] = np.array(value)[keep]
 
-            if self._thermo_profile is not None:
-                new_len = len(self._wind_profile.gridded_times)
-                self._thermo_profile.truncate_to(new_len)
+        return trimmed
 
-        return self._wind_profile
+    def _average_ensemble(self, series, flags):
+        """ Mean across sensors, excluding any the flags reject.
+
+        :param list series: one array per sensor
+        :param list flags: one flag per sensor, 0 meaning good
+        :rtype: np.ndarray
+        """
+        kept = [values for values, flag in zip(series, flags) if flag == qc.GOOD]
+        if not kept:
+            # Every sensor rejected: report NaN rather than an empty mean,
+            # which is what the previous NaN-fill-then-nanmean produced.
+            return np.full(len(series[0]), np.nan)
+        return np.nanmean(np.vstack(kept), axis=0)
+
+    def compute_thermo(self):
+        """ Calibrate, QC and grid the thermodynamic variables.
+
+        Populates temp, rh, mixing_ratio, theta, T_d, q and the per-sensor
+        flag arrays temp_flags and rh_flags. alt, pres, time, lat and lon
+        are already on the Profile - they were previously recomputed here
+        from the same inputs, giving identical numbers three times over.
+
+        :rtype: Profile
+        """
+        if self._thermo_computed:
+            return self
+
+        data = self._trim(self._thermo_data, _THERMO_TIME_BASES)
+        serial_numbers = data['serial_numbers']
+
+        temp_raw = calibration.calibrate_temperature(data, serial_numbers)
+        rh_raw = calibration.calibrate_humidity(data, serial_numbers)
+
+        self.temp_flags = qc.qc(temp_raw, *self.QC_THRESHOLDS['temp'])
+        self.rh_flags = qc.qc(rh_raw, *self.QC_THRESHOLDS['rh'])
+
+        temp = self._average_ensemble(temp_raw, self.temp_flags) \
+            * self._units.kelvin
+        rh = self._average_ensemble(rh_raw, self.rh_flags) \
+            * self._units.percent
+
+        self.temp = utils.regrid_data(data=temp, data_times=data['time_temp'],
+                                      gridded_times=self.gridded_times,
+                                      units=self._units)
+        self.rh = utils.regrid_data(data=rh, data_times=data['time_rh'],
+                                    gridded_times=self.gridded_times,
+                                    units=self._units)
+
+        derived = thermo_retrieval.derive(self.pres, self.temp, self.rh)
+        self.mixing_ratio = derived['mixing_ratio']
+        self.theta = derived['theta']
+        self.T_d = derived['T_d']
+        self.q = derived['q']
+
+        self._thermo_computed = True
+        if utils.writes_netcdf(self._nc_level):
+            self._save_thermo_netCDF(self.file_path)
+        return self
+
+    def compute_wind(self, algorithm='linear'):
+        """ Retrieve wind from airframe tilt and grid it.
+
+        :param str algorithm: 'linear' or 'quadratic'
+        :rtype: Profile
+        """
+        if self._wind_computed:
+            return self
+
+        if algorithm not in wind_retrieval.ALGORITHM_EQUATIONS:
+            raise ValueError(
+                f'unknown wind algorithm {algorithm!r}; available: '
+                f'{sorted(wind_retrieval.ALGORITHM_EQUATIONS)}')
+
+        data = self._trim(self._wind_data, _WIND_TIME_BASES)
+        equation_name = wind_retrieval.ALGORITHM_EQUATIONS[algorithm]
+        coefficients = utils.coef_manager.get_coefs(
+            'Wind', self.tail_number, equation_name)
+
+        direction, speed = wind_retrieval.retrieve(
+            data['roll'], data['pitch'], data['yaw'],
+            coefficients, equation_name)
+        direction = direction % (2 * np.pi)
+
+        self.dir = utils.regrid_data(data=direction, data_times=data['time'],
+                                     gridded_times=self.gridded_times,
+                                     units=self._units)
+        self.speed = utils.regrid_data(data=speed, data_times=data['time'],
+                                       gridded_times=self.gridded_times,
+                                       units=self._units)
+        self.u, self.v = metpy.calc.wind_components(self.speed, self.dir)
+
+        self._wind_computed = True
+        if utils.writes_netcdf(self._nc_level):
+            self._save_wind_netCDF(self.file_path)
+        return self
+
+    def get_wind_profile(self, file_path=None, algorithm='linear'):
+        """ Deprecated. Use compute_wind(); the wind lives on the Profile.
+
+        :rtype: Profile
+        """
+        warnings.warn(
+            'get_wind_profile() is deprecated; wind is computed onto the '
+            'Profile itself by compute_wind().',
+            DeprecationWarning, stacklevel=2)
+        return self.compute_wind(algorithm=algorithm)
 
     def get_thermo_profile(self, file_path=None):
-        """ If a Thermo_Profile object does not already exist, it is created
-        when this method is called.
+        """ Deprecated. Use compute_thermo(); the values live on the Profile.
 
-        :return: the Thermo_Profile object
-        :rtype: Thermo_Profile
+        :rtype: Profile
         """
-        if file_path is None:
-            file_path = self.file_path
+        warnings.warn(
+            'get_thermo_profile() is deprecated; thermodynamic variables '
+            'are computed onto the Profile itself by compute_thermo().',
+            DeprecationWarning, stacklevel=2)
+        return self.compute_thermo()
 
-        if self._thermo_profile is None:
-            thermo_data = self._thermo_data
-            self._thermo_profile = \
-                Thermo_Profile(thermo_data, self.resolution,
-                               gridded_times=self.gridded_times,
-                               gridded_centers=self.gridded_centers,
-                               time_centers=self.time,
-                               indices=self.indices, ascent=self.ascent,
-                               units=self._units, file_path=file_path,
-                               pos=self._pos,
-                               meta=self.meta,
-                               nc_level=self._nc_level)
+    # The per-variable thermo_/wind_ writers, moved here verbatim from the
+    # classes they used to live on. Stage 5 replaces all four writers in
+    # this file with one that takes a processing level.
+    def _save_thermo_netCDF(self, file_path):
+        """ Save a NetCDF file to facilitate future processing if a .JSON was
+        read.
 
-            if len(self._thermo_profile.gridded_times) > \
-                    len(self.gridded_times):
-                new_len = len(self.gridded_times)
-                self._thermo_profile.truncate_to(new_len)
-            elif len(self._thermo_profile.gridded_times) < \
-                    len(self.gridded_times):
-                new_len = len(self._thermo_profile.gridded_times)
-                self.gridded_times = self.gridded_times[:new_len]
-                self.gridded_base = self.gridded_base[:new_len]
+        :param string file_path: file name
+        """
+        if '.nc' in file_path or '.cdf' in file_path:
+            file_name = file_path
+        elif self.meta is not None:
+            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
+                        str(self.meta.get("platform_id")) + "CMT" + \
+                        "thermo_" + self._ascent_filename_tag + ".c1." + \
+                        self.meta.get("timestamp").replace("_", ".") + ".cdf"
+            file_name = os.path.join(os.path.dirname(file_path), file_name)
 
-            if self._wind_profile is not None:
-                new_len = len(self._thermo_profile.gridded_times)
-                self._wind_profile.truncate_to(new_len)
+        else:
+            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
 
-        return self._thermo_profile
+
+        main_file = netCDF4.Dataset(file_name, "w",
+                                    format="NETCDF4", mmap=False)
+        # File NC compliant to version 1.8
+        main_file.setncattr("Conventions", "NC-1.8")
+
+        #
+        # Get the flags in
+        #
+        flag_dict = {0: "good",
+                     2: "bias",
+                     3: "lag",
+                     4: "empty"}
+        rh_flags = main_file.createGroup("rh_flags")
+        for i in range(len(self.rh_flags)):
+            rh_flags.setncattr("sensor" + str(i+1), flag_dict[self.rh_flags[i]])
+        temp_flags = main_file.createGroup("temp_flags")
+        for i in range(len(self.temp_flags)):
+            temp_flags.setncattr("sensor" + str(i+1), flag_dict[self.temp_flags[i]])
+
+        main_file.createDimension("time", None)
+        # TIME
+        time_var = main_file.createVariable("time", "f8", ("time",))
+        time_var[:] = netCDF4.date2num(self.time,
+                                       units='microseconds since \
+                                       2010-01-01 00:00:00:00')
+        time_var.units = 'microseconds since 2010-01-01 00:00:00:00'
+
+        # Do base_time and time_offset like ARM
+        bt = abs((self.time[0] - datetime(1970, 1, 1)).total_seconds())
+        bt_var = main_file.createVariable('base_time', 'i8')
+        bt_var.setncattr('long_name', 'Base time in Epoch')
+        bt_var.setncattr('ancillary_variables', 'time_offset')
+        bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
+        bt_var[:] = bt
+
+        to = netCDF4.date2num(self.time,
+                              units=f'seconds since {self.time[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
+        to_var.setncattr('long_name', 'Time offset from base_time')
+        to_var.setncattr('units', f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to_var.setncattr('ancillary_variables', 'base_time')
+        to_var[:] = to
+
+        # PRES
+        pres_var = main_file.createVariable("pres", "f8", ("time",))
+        pres_var[:] = self.pres.magnitude
+        pres_var.units = str(self.pres.units)
+        # RH
+        rh_var = main_file.createVariable("rh", "f8", ("time",))
+        rh_var[:] = self.rh.magnitude
+        rh_var.units = str(self.rh.units)
+        # ALT
+        alt_var = main_file.createVariable("alt", "f8", ("time",))
+        alt_var[:] = self.alt.magnitude
+        alt_var.units = str(self.alt.units)
+        # TEMP
+        temp_var = main_file.createVariable("temp", "f8", ("time",))
+        temp_var[:] = self.temp.magnitude
+        temp_var.units = str(self.temp.units)
+        # MIXING RATIO
+        mr_var = main_file.createVariable("mr", "f8", ("time",))
+        mr_var[:] = self.mixing_ratio.magnitude
+        mr_var.units = str(self.mixing_ratio.units)
+        # THETA
+        theta_var = main_file.createVariable("theta", "f8", ("time",))
+        theta_var[:] = self.theta.magnitude
+        theta_var.units = str(self.theta.units)
+        # T_D
+        Td_var = main_file.createVariable("Td", "f8", ("time",))
+        Td_var[:] = self.T_d.magnitude
+        Td_var.units = str(self.T_d.units)
+        # Q
+        q_var = main_file.createVariable("q", "f8", ("time",))
+        q_var[:] = self.q.magnitude
+        q_var.units = str(self.q.units)
+        # LAT
+        lat_var = main_file.createVariable("lat", "f8", ("time",))
+        lat_var[:] = self.lat.magnitude
+        lat_var.units = str(self.lat.units)
+        # LON
+        lon_var = main_file.createVariable("lon", "f8", ("time",))
+        lon_var[:] = self.lon.magnitude
+        lon_var.units = str(self.lon.units)
+
+        main_file.close()
+
+    def _save_wind_netCDF(self, file_path):
+        """ Save a NetCDF file to facilitate future processing if a .JSON was
+        read.
+
+        :param string file_path: file name
+        """
+
+        if '.nc' in file_path or '.cdf' in file_path:
+            file_name = file_path
+        elif self.meta is not None:
+            file_name = str(self.meta.get("location")).replace(' ', '') + str(self.resolution.magnitude) + \
+                    str(self.meta.get("platform_id")) + "CMT" + \
+                    "wind_" + self._ascent_filename_tag + ".c1." + \
+                    self.meta.get("timestamp").replace("_", ".") + ".cdf"
+            file_name = os.path.join(os.path.dirname(file_path), file_name)
+
+        else:
+            raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
+
+
+        main_file = netCDF4.Dataset(file_name, "w",
+                                    format="NETCDF4", mmap=False)
+        # File NC compliant to version 1.8
+        main_file.setncattr("Conventions", "NC-1.8")
+        
+        main_file.createDimension("time", None)
+        # DIRECTION
+        dir_var = main_file.createVariable("dir", "f8", ("time",))
+        dir_var[:] = self.dir.magnitude
+        dir_var.units = str(self.dir.units)
+        # SPEED
+        spd_var = main_file.createVariable("speed", "f8", ("time",))
+        spd_var[:] = self.speed.magnitude
+        spd_var.units = str(self.speed.units)
+        # U
+        u_var = main_file.createVariable("u", "f8", ("time",))
+        u_var[:] = self.u.magnitude
+        u_var.units = str(self.u.units)
+        # V
+        v_var = main_file.createVariable("v", "f8", ("time",))
+        v_var[:] = self.v.magnitude
+        v_var.units = str(self.v.units)
+        # ALT
+        alt_var = main_file.createVariable("alt", "f8", ("time",))
+        alt_var[:] = self.alt.magnitude
+        alt_var.units = str(self.alt.units)
+        # PRES
+        pres_var = main_file.createVariable("pres", "f8", ("time",))
+        pres_var[:] = self.pres.magnitude
+        pres_var.units = str(self.pres.units)
+        # LAT
+        lat_var = main_file.createVariable("lat", "f8", ("time",))
+        lat_var[:] = self.lat.magnitude
+        lat_var.units = str(self.lat.units)
+        # LON
+        lon_var = main_file.createVariable("lon", "f8", ("time",))
+        lon_var[:] = self.lon.magnitude
+        lon_var.units = str(self.lon.units)
+
+        # TIME
+        time_var = main_file.createVariable("time", "f8", ("time",))
+        time_var[:] = netCDF4.date2num(self.time,
+                                       units='microseconds since \
+                                       2010-01-01 00:00:00:00')
+        time_var.units = 'microseconds since 2010-01-01 00:00:00:00'
+
+        # Do base_time and time_offset like ARM
+        bt = abs((self.time[0] - datetime(1970, 1, 1)).total_seconds())
+        bt_var = main_file.createVariable('base_time', 'i8')
+        bt_var.setncattr('long_name', 'Base time in Epoch')
+        bt_var.setncattr('ancillary_variables', 'time_offset')
+        bt_var.setncattr('units', 'seconds since 1970-01-01 00:00:00 UTC')
+        bt_var[:] = bt
+
+        to = netCDF4.date2num(self.time,
+                              units=f'seconds since {self.time[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to_var = main_file.createVariable('time_offset', 'f4', dimensions=('time',))
+        to_var.setncattr('long_name', 'Time offset from base_time')
+        to_var.setncattr('units', f'seconds since {self.gridded_times[0]:%Y-%m-%d %H:%M:%S UTC}')
+        to_var.setncattr('ancillary_variables', 'base_time')
+        to_var[:] = to
+
+        main_file.close()
 
     def save_netcdf(self, file_path=None):
         if file_path is None:
@@ -428,8 +750,9 @@ class Profile():
         else:
             raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
 
-        if self._wind_profile is None and self._thermo_profile is None:
-            print("No wind or thermo profile to save")
+        if not (self._wind_computed or self._thermo_computed):
+            print("No wind or thermo data to save; call compute_thermo() "
+                  "and/or compute_wind() first")
             return
 
         main_file = netCDF4.Dataset(file_name, "w", format="NETCDF4", mmap=False)
@@ -503,54 +826,54 @@ class Profile():
         lon_var[:] = self.lon.magnitude
         lon_var.units = str(self.lon.units)
 
-        if self._thermo_profile is not None:
+        if self._thermo_computed:
             # TEMP
             temp_var = main_file.createVariable("tdry", "f8", ("time",))
-            temp_var[:] = self._thermo_profile.temp.magnitude
-            temp_var.units = str(self._thermo_profile.temp.units)
+            temp_var[:] = self.temp.magnitude
+            temp_var.units = str(self.temp.units)
             temp_var.long_name = "Dry bulb temperature"
 
             # MIXING RATIO
             mr_var = main_file.createVariable("mr", "f8", ("time",))
-            mr_var[:] = self._thermo_profile.mixing_ratio.magnitude
-            mr_var.units = str(self._thermo_profile.mixing_ratio.units)
+            mr_var[:] = self.mixing_ratio.magnitude
+            mr_var.units = str(self.mixing_ratio.units)
             mr_var.long_name = "Water vapor mixing ratio"
             # THETA
             theta_var = main_file.createVariable("theta", "f8", ("time",))
-            theta_var[:] = self._thermo_profile.theta.magnitude
-            theta_var.units = str(self._thermo_profile.theta.units)
+            theta_var[:] = self.theta.magnitude
+            theta_var.units = str(self.theta.units)
             theta_var.long_name = "Potential temperature"
             # T_D
             Td_var = main_file.createVariable("Td", "f8", ("time",))
-            Td_var[:] = self._thermo_profile.T_d.magnitude
-            Td_var.units = str(self._thermo_profile.T_d.units)
+            Td_var[:] = self.T_d.magnitude
+            Td_var.units = str(self.T_d.units)
             Td_var.long_name = "Dew point temperature"
             # Q
             q_var = main_file.createVariable("q", "f8", ("time",))
-            q_var[:] = self._thermo_profile.q.magnitude * 1e3
-            q_var.units = str(self._thermo_profile.q.units)
+            q_var[:] = self.q.magnitude * 1e3
+            q_var.units = str(self.q.units)
             q_var.long_name = "Specific humidity"
 
-        if self._wind_profile is not None:
+        if self._wind_computed:
             # DIRECTION
             dir_var = main_file.createVariable("dir", "f8", ("time",))
-            dir_var[:] = self._wind_profile.dir.magnitude
-            dir_var.units = str(self._wind_profile.dir.units)
+            dir_var[:] = self.dir.magnitude
+            dir_var.units = str(self.dir.units)
             dir_var.long_name = "Wind direction"
             # SPEED
             spd_var = main_file.createVariable("wspd", "f8", ("time",))
-            spd_var[:] = self._wind_profile.speed.magnitude
-            spd_var.units = str(self._wind_profile.speed.units)
+            spd_var[:] = self.speed.magnitude
+            spd_var.units = str(self.speed.units)
             spd_var.long_name = "Wind speed"
             # U
             u_var = main_file.createVariable("wind_u", "f8", ("time",))
-            u_var[:] = self._wind_profile.u.magnitude
-            u_var.units = str(self._wind_profile.u.units)
+            u_var[:] = self.u.magnitude
+            u_var.units = str(self.u.units)
             u_var.long_name = "westward wind component"
             # V
             v_var = main_file.createVariable("wind_v", "f8", ("time",))
-            v_var[:] = self._wind_profile.v.magnitude
-            v_var.units = str(self._wind_profile.v.units)
+            v_var[:] = self.v.magnitude
+            v_var.units = str(self.v.units)
             v_var.long_name = "northward wind component"
 
         # Close the netCDF file
@@ -574,8 +897,9 @@ class Profile():
         else:
             raise IOError("Please specify a file name or include metadata when saving Profile netcdfs")
 
-        if self._wind_profile is None and self._thermo_profile is None:
-            print("No wind or thermo profile to save")
+        if not (self._wind_computed or self._thermo_computed):
+            print("No wind or thermo data to save; call compute_thermo() "
+                  "and/or compute_wind() first")
             return
 
         main_file = netCDF4.Dataset(file_name, "w", format="NETCDF4")
@@ -667,65 +991,65 @@ class Profile():
         lon_var.setncattr('axis', 'X')
         lon_var[:] = self.lon.magnitude
 
-        if self._thermo_profile is not None:
+        if self._thermo_computed:
             # TEMP
             temp_var = main_file.createVariable("air_temperature", "f8", ("obs",))
-            temp_var[:] = self._thermo_profile.temp.magnitude
-            temp_var.units = str(self._thermo_profile.temp.units)
+            temp_var[:] = self.temp.magnitude
+            temp_var.units = str(self.temp.units)
             temp_var.standard_name = "air_temperature"
             temp_var.long_name = "bulk temperature of the air"
 
             temp_var = main_file.createVariable("relative_humidity", "f8", ("obs",))
-            temp_var[:] = self._thermo_profile.rh.magnitude
-            temp_var.units = str(self._thermo_profile.rh.units)
+            temp_var[:] = self.rh.magnitude
+            temp_var.units = str(self.rh.units)
             temp_var.standard_name = "relative_humidity"
             temp_var.long_name = "Relative humidity of the air"
 
             # MIXING RATIO
             mr_var = main_file.createVariable("humidity_mixing_ratio", "f8", ("obs",))
-            mr_var[:] = self._thermo_profile.mixing_ratio.magnitude
+            mr_var[:] = self.mixing_ratio.magnitude
             mr_var.units = 'kg/kg'
             mr_var.standard_name = "humidity_mixing_ratio"
             mr_var.long_name = "Humidity Mixing Ratio"
             # # THETA
             # theta_var = main_file.createVariable("theta", "f8", ("time",))
-            # theta_var[:] = self._thermo_profile.theta.magnitude
-            # theta_var.units = str(self._thermo_profile.theta.units)
+            # theta_var[:] = self.theta.magnitude
+            # theta_var.units = str(self.theta.units)
             # theta_var.long_name = "Potential temperature"
             # # T_D
             Td_var = main_file.createVariable("dewpoint", "f8", ("obs",))
-            Td_var[:] = self._thermo_profile.T_d.magnitude
-            Td_var.units = str(self._thermo_profile.T_d.units)
+            Td_var[:] = self.T_d.magnitude
+            Td_var.units = str(self.T_d.units)
             Td_var.long_name = "Dew point temperature"
             Td_var.standard_name = "dew_point_temperature"
             # # Q
             # q_var = main_file.createVariable("q", "f8", ("time",))
-            # q_var[:] = self._thermo_profile.q.magnitude * 1e3
-            # q_var.units = str(self._thermo_profile.q.units)
+            # q_var[:] = self.q.magnitude * 1e3
+            # q_var.units = str(self.q.units)
             # q_var.long_name = "Specific humidity"
 
-        if self._wind_profile is not None:
+        if self._wind_computed:
             # DIRECTION
             dir_var = main_file.createVariable("wind_direction", "f8", ("obs",))
-            dir_var[:] = self._wind_profile.dir.magnitude
-            dir_var.units = str(self._wind_profile.dir.units)
+            dir_var[:] = self.dir.magnitude
+            dir_var.units = str(self.dir.units)
             dir_var.standard_name = 'wind_from_direction'
             dir_var.long_name = "Wind direction"
             # SPEED
             spd_var = main_file.createVariable("wind_speed", "f8", ("obs",))
-            spd_var[:] = self._wind_profile.speed.magnitude
-            spd_var.units = str(self._wind_profile.speed.units)
+            spd_var[:] = self.speed.magnitude
+            spd_var.units = str(self.speed.units)
             spd_var.standard_name = "wind_speed"
             spd_var.long_name = "Wind speed"
             # # U
             # u_var = main_file.createVariable("wind_u", "f8", ("time",))
-            # u_var[:] = self._wind_profile.u.magnitude
-            # u_var.units = str(self._wind_profile.u.units)
+            # u_var[:] = self.u.magnitude
+            # u_var.units = str(self.u.units)
             # u_var.long_name = "westward wind component"
             # # V
             # v_var = main_file.createVariable("wind_v", "f8", ("time",))
-            # v_var[:] = self._wind_profile.v.magnitude
-            # v_var.units = str(self._wind_profile.v.units)
+            # v_var[:] = self.v.magnitude
+            # v_var.units = str(self.v.units)
             # v_var.long_name = "northward wind component"
 
         # Close the netCDF file
@@ -752,32 +1076,37 @@ class Profile():
         return result
 
     def __str__(self):
-        if self._wind_profile is not None:
-            wind_str = str(self._wind_profile)
-        else:
-            wind_str = ""
-        if self._thermo_profile is not None:
-            thermo_str = str(self._thermo_profile)
-        else:
-            thermo_str = ""
-        return "Profile object:\n\t\tLocation data: " + str(type(self._pos)) \
-               + "\n" + wind_str + thermo_str
+        computed = [name for name, done in
+                    (('thermo', self._thermo_computed),
+                     ('wind', self._wind_computed)) if done]
+        return (f'Profile({self._ascent_filename_tag}, '
+                f'{len(self.gridded_centers)} levels at {self.resolution:~P}, '
+                f'starting {self.time[0]:%Y-%m-%d %H:%M:%S}Z, '
+                f'computed: {", ".join(computed) or "none"})')
 
-    def __gt__(self, other):
-        if self.gridded_times[0] > other.gridded_times[0]:
-            return True
-        else:
-            return False
+    def _sort_key(self):
+        """Profiles order by when they started."""
+        return self.gridded_times[0]
 
     def __lt__(self, other):
-        if self.gridded_times[0] < other.gridded_times[0]:
-            return True
-        else:
-            return False
+        return self._sort_key() < other._sort_key()
+
+    def __gt__(self, other):
+        return self._sort_key() > other._sort_key()
+
+    def __le__(self, other):
+        return self._sort_key() <= other._sort_key()
+
+    def __ge__(self, other):
+        return self._sort_key() >= other._sort_key()
 
     def __eq__(self, other):
-        def __lt__(self, other):
-            if self.gridded_times[0] == other.gridded_times[0]:
-                return True
-            else:
-                return False
+        # The previous __eq__ defined a nested __lt__ and then fell off the
+        # end, so every Profile compared unequal to every other including
+        # itself.
+        if not isinstance(other, Profile):
+            return NotImplemented
+        return self._sort_key() == other._sort_key()
+
+    def __hash__(self):
+        return hash(self._sort_key())

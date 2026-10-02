@@ -82,12 +82,14 @@ def run_reference_pipeline(bin_path, lowpass=False):
         if lowpass:
             profile.lowpass_filter(wind=True, thermo=False, Fc=.06)
 
-        thermo = profile.get_thermo_profile()
-        wind = profile.get_wind_profile()
+        profile.compute_thermo()
+        profile.compute_wind()
 
+        # Keys keep their pre-merge names so snapshots stay comparable;
+        # all three groups now read off the one Profile.
         _collect(f'p{i}.profile', profile, PROFILE_VARS, out)
-        _collect(f'p{i}.thermo', thermo, THERMO_VARS, out)
-        _collect(f'p{i}.wind', wind, WIND_VARS, out)
+        _collect(f'p{i}.thermo', profile, THERMO_VARS, out)
+        _collect(f'p{i}.wind', profile, WIND_VARS, out)
 
     return out
 
