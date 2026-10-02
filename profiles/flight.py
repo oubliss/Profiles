@@ -8,6 +8,7 @@ import netCDF4
 import numpy as np
 import pandas as pd
 from datetime import datetime as dt
+from datetime import timedelta
 from profiles.unit_registry import units  # shared pint registry
 import profiles.utils as utils
 import profiles.readers as readers
@@ -178,6 +179,60 @@ class FlightLog():
         self.calib_dir, self.calib_speed = wind_retrieval.retrieve(
             wind_data['roll'], wind_data['pitch'], wind_data['yaw'],
             coefficients, equation_name)
+
+    def sensor_window(self, settle_seconds=5):
+        """ The interval over which the scoop fan was aspirating the sensors.
+
+        Outside it the sensors are not ventilated and their readings are not
+        trustworthy, so leg detection is restricted to this window.
+
+        :param float settle_seconds: delay added to the start to let the
+           sensors reach equilibrium once the fan spins up
+        :rtype: tuple
+        :return: (start, stop) datetimes. Falls back to the full record when
+           the fan flag is unusable.
+        """
+        thermo = self.thermo_data()
+        times = thermo['time_temp']
+
+        running = np.where(np.array(thermo['fan_flag']) > 0)[0]
+        if running.size == 0:
+            print("Error with the fan_flag.... Just using the start and end "
+                  "times of the file...")
+            return times[0], times[-1]
+
+        return (times[running.min()] + timedelta(seconds=settle_seconds),
+                times[running.max()])
+
+    def find_legs(self, legacy=False, confirm_bounds=False,
+                  profile_start_height=None):
+        """ Locate each vertical profile flown during this flight.
+
+        This lived in two places - Profile_Set.add_all_profiles and
+        Profile.__init__ - which had drifted apart: one passed the fan
+        window and the other did not.
+
+        :param bool legacy: use the pre-2021 altitude-threshold finder
+           instead of peak detection
+        :param bool confirm_bounds: plot what was found for a sanity check
+        :param profile_start_height: starting height for the legacy finder
+        :rtype: list[tuple]
+        :return: (start, peak, end) times for each profile found
+
+        NOTE: peak detection currently uses a one-metre prominence, so a
+        small altitude wiggle at the top of a real profile is reported as a
+        profile of its own. See CHANGELOG.
+        """
+        pos = self.pos_data()
+
+        if legacy:
+            return utils.identify_profile(
+                pos['alt_MSL'], pos['time'], confirm_bounds, to_return=[],
+                profile_start_height=profile_start_height)
+
+        return utils.identify_profile_peaks(
+            pos['alt_MSL'].magnitude, pos['time'],
+            window=self.sensor_window(), confirm_bounds=confirm_bounds)
 
     def pos_data(self):
         """ Gets data needed by the Profile constructor.

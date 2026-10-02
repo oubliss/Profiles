@@ -106,6 +106,28 @@ their mean and re-test, never going below two survivors.
   `DeprecationWarning`.
 - `xarray` is a new dependency.
 
+- **`Thermo_Profile` and `Wind_Profile` are merged into `Profile`.** Both
+  were handed the same grid and produced variables on it: `pres`, `alt` and
+  `time` were computed three times from the same inputs, `lat`/`lon` twice
+  by two different implementations, and 78 lines of `Profile` existed only
+  to reconcile the two children's lengths. Use `compute_thermo()` and
+  `compute_wind()`; `get_thermo_profile()` / `get_wind_profile()` remain as
+  deprecated shims returning `self`.
+- **Physics and QC are plain functions**, in `profiles/retrievals/`,
+  `profiles/calibration.py` and `profiles/qc.py`, testable without
+  constructing a Profile. The rotation-matrix tilt loop existed in three
+  identical copies; the per-sensor calibration block in two.
+- **`Profile_Set` is deprecated** in favour of
+  `profiles.processing.process_flights()` with a `ProcessingConfig`. It
+  still works and delegates. `Profile_Set.add_profile` and `read_netCDF`
+  are deleted - both raised `TypeError` unconditionally.
+- Leg detection moved onto `FlightLog.find_legs()`; it previously existed
+  in both `Profile_Set.add_all_profiles` and `Profile.__init__`, and the
+  copies had drifted (only one passed the fan-aspiration window).
+- `Profile.__eq__` defined a nested `__lt__` and fell off the end returning
+  `None`, so every Profile compared unequal to every other including
+  itself. Full comparison set plus `__hash__` now.
+
 ### Added
 
 - `test/` is a real suite: baseline characterization snapshots, grid
@@ -122,6 +144,21 @@ their mean and re-test, never going below two survivors.
   Pre-existing; `Raw_Profile` falls back to a filename derived from the input
   and does not.
 - RH per-sensor corrections are not applied at all (see `rh_calib`).
+- **Peak detection reports phantom profiles.** `identify_profile_peaks`
+  calls `find_peaks(alts, prominence=1)` - a one-metre prominence. On
+  flight616 the second "profile" it finds runs 08:07:51 to 08:07:53, two
+  seconds, over one metre of altitude (1746.8 to 1747.8 m): a wiggle at the
+  top of the real profile. With `profile_start_height` forced to 350 m the
+  grid is built from 350 to 1740 m regardless, so 119 of its 140 levels
+  fall past the end of that two-second leg and every variable is NaN there.
+  The `if len(p.gridded_times) > 3` guard in the processing scripts passes,
+  so a mostly-empty second c1 file gets written. `ProcessingConfig
+  .min_levels` is a stopgap; a real fix needs a minimum profile depth in
+  the detector, which changes which profiles get emitted.
+- `Thermo_Profile.q` carried kg/kg magnitudes labelled `gPerKg`.
+  `Profile.save_netcdf` compensated with `* 1e3` but the per-variable
+  writer did not, so `thermo_*` files are mislabelled by 1000. Unchanged
+  pending Stage 5's single writer.
 - `_read_csv` is still the original hand-written parser. It has no test
   coverage and no sample data in the repo, so it was left alone rather than
   migrated to the schema on faith.
