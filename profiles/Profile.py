@@ -8,7 +8,7 @@ import profiles.utils as utils
 import profiles
 import sys
 import os
-from profiles.Raw_Profile import Raw_Profile
+from profiles.flight import FlightLog
 from profiles.Thermo_Profile import Thermo_Profile
 from profiles.Wind_Profile import Wind_Profile
 from profiles.Coef_Manager import Coef_Manager
@@ -62,7 +62,7 @@ class Profile():
         :param list<tuple> index_list: Profile start, peak, and end indices if\
            known - leave as None in most cases
         :param str scoop_id: the sensor package used, if known
-        :param Raw_Profile raw_profile: the partially-processed file - use \
+        :param FlightLog raw_profile: the partially-processed file - use \
            this if you have it, there's no need to make the computer do extra \
            work.
         :param int profile_start_height: if given, replaces prompt to user \
@@ -85,10 +85,10 @@ class Profile():
         if raw_profile is not None:
             self._raw_profile = raw_profile
         else:
-            # scoop_id is not a Raw_Profile parameter; passing it
+            # scoop_id is not a FlightLog parameter; passing it
             # positionally put it in the nc_level slot, which silently
             # suppressed the a0 file and the coefficient application.
-            self._raw_profile = Raw_Profile(file_path, dev,
+            self._raw_profile = FlightLog(file_path, dev,
                                             nc_level=nc_level,
                                             metadata=metadata, **kwargs)
         self._units = self._raw_profile.get_units()

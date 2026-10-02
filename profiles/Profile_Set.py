@@ -7,7 +7,7 @@ import datetime as dt
 import numpy as np
 from metpy.units import units
 from profiles.Profile import Profile
-from profiles.Raw_Profile import Raw_Profile
+from profiles.flight import FlightLog
 from profiles.Thermo_Profile import Thermo_Profile
 from profiles.Wind_Profile import Wind_Profile
 import profiles.utils as utils
@@ -105,7 +105,7 @@ class Profile_Set():
             self._root_dir = self._root_dir[:self._root_dir.rindex("/")+1]
 
         # Process altitude data for profile identification
-        raw_profile_set = Raw_Profile(file_path, self.dev,
+        raw_profile_set = FlightLog(file_path, self.dev,
                                       nc_level=self._nc_level,
                                       metadata=metadata, tail_number=self.tail_number)
 
@@ -205,7 +205,7 @@ class Profile_Set():
             self._root_dir = os.path.dirname(self._root_dir[0:match_up_to+1])
 
         # Process altitude data for profile identification
-        raw_profile = Raw_Profile(file_path, self.dev, scoop_id,
+        raw_profile = FlightLog(file_path, self.dev, scoop_id,
                                   nc_level=self._nc_level,
                                   meta_header_path=meta_header_path,
                                   meta_flight_path=meta_flight_path)

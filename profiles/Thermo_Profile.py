@@ -46,7 +46,7 @@ class Thermo_Profile():
             "pres":, "temp_pres":, "ground_temp_pres":, \
             "alt_pres":, "time_pres":, "serial_numbers":}, \
             which is returned by \
-            Raw_Profile.thermo_data
+            FlightLog.thermo_data
         :param Quantity resoltion: vertical resolution in units of altitude \
            or pressure to which the data should be calculated
         :param str file_path: the path to the original data file WITHOUT the \

@@ -35,7 +35,7 @@ class Wind_Profile():
         resolution
 
         :param dict wind_dict: the dictionary produced by \
-           Raw_Profile.get_wind_data()
+           FlightLog.get_wind_data()
         :param Quantity resolution: vertical resolution of the processed data
         :param List<Datetime> gridded_times: times for which Profile has \
            requested wind data
@@ -253,7 +253,7 @@ class Wind_Profile():
     def _calc_winds_linear(self, wind_data):
         """ Calculate wind direction, speed, u, and v. Currently, this only
         works when the craft is HORIZONTALLY STATIONARY.
-        :param dict wind_data: dictionary from Raw_Profile.get_wind_data()
+        :param dict wind_data: dictionary from FlightLog.get_wind_data()
         :param bool isCopter: True if rotor-wing, false if fixed-wing
         :rtype: tuple<list>
         :return: (direction, speed)

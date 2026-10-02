@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 
 from profiles import schema
-from profiles.Raw_Profile import Raw_Profile
+from profiles.flight import FlightLog
 from profiles.parsing import parse
 from profiles.readers import iter_bin
 from test.harness import staged_bin
@@ -20,7 +20,7 @@ from test.harness import staged_bin
 @pytest.fixture(scope='module')
 def raw(tmp_path_factory):
     path = staged_bin(tmp_path_factory.mktemp('parse'))
-    return Raw_Profile(str(path), dev=True, nc_level=None)
+    return FlightLog(str(path), dev=True, nc_level=None)
 
 
 def test_every_required_group_is_present(raw):

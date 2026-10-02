@@ -1,5 +1,5 @@
 """
-Raw_Profile a0 NetCDF round trip.
+FlightLog a0 NetCDF round trip.
 
 _save_netCDF / _read_netCDF had no coverage, which is how the rotation block
 came to overwrite rot_list[6] three times: PN ended up holding PD's values,
@@ -9,10 +9,10 @@ quantities (so the next arithmetic on them raised instead of converting).
 import numpy as np
 import pytest
 
-from profiles.Raw_Profile import Raw_Profile
+from profiles.flight import FlightLog
 from test.harness import staged_bin
 
-# (index into Raw_Profile.rotation, variable name in the file)
+# (index into FlightLog.rotation, variable name in the file)
 ROTATION_FIELDS = [(0, 'VE'), (1, 'VN'), (2, 'VD'),
                    (3, 'roll'), (4, 'pitch'), (5, 'yaw'),
                    (6, 'PN'), (7, 'PE'), (8, 'PD')]
@@ -21,10 +21,10 @@ ROTATION_FIELDS = [(0, 'VE'), (1, 'VN'), (2, 'VD'),
 @pytest.fixture(scope='module')
 def round_tripped(tmp_path_factory):
     tmp = tmp_path_factory.mktemp('roundtrip')
-    original = Raw_Profile(str(staged_bin(tmp)), dev=True, nc_level=None)
+    original = FlightLog(str(staged_bin(tmp)), dev=True, nc_level=None)
     nc_path = tmp / 'flight616_a0.nc'
     original._save_netCDF(str(nc_path))
-    return original, Raw_Profile(str(nc_path), dev=True)
+    return original, FlightLog(str(nc_path), dev=True)
 
 
 @pytest.mark.parametrize('index,name', ROTATION_FIELDS)

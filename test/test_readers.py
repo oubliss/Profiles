@@ -94,10 +94,10 @@ def test_unknown_extension_is_rejected():
 
 def test_file_with_no_usable_messages_reports_clearly(tmp_path):
     """A failed download saved as .BIN should say what is missing."""
-    from profiles.Raw_Profile import Raw_Profile
+    from profiles.flight import FlightLog
 
     decoy = tmp_path / 'notalog.BIN'
     decoy.write_text('{"status":3,"description":"Flight Id does not exist."}')
 
     with pytest.raises(ValueError, match='contains no usable data'):
-        Raw_Profile(str(decoy), dev=True, nc_level=None)
+        FlightLog(str(decoy), dev=True, nc_level=None)

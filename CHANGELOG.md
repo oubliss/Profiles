@@ -86,12 +86,34 @@ their mean and re-test, never going below two survivors.
   no offset has ever reached the data. Behaviour is unchanged; the docstring
   now records what has to be settled before a correction is reinstated.
 
+### Changed
+
+- **`.BIN` files are read directly.** `profiles/readers/` streams an
+  ArduPilot log into memory instead of shelling it through a vendored
+  `mavlogdump` fork that wrote a newline-delimited `.json` beside the
+  original and re-read it. The 12 MB reference flight produced 83 MB of
+  intermediate; an 18 MB OK3DM flight produced 104 MB. Old `.json` files
+  still load. `profiles/mavlogdump_Profiles.py` is deleted (459 lines).
+- **Parsing is schema-driven.** `profiles/schema.py` declares each message
+  type's named fields and units; `profiles/parsing.py` has one loop that
+  builds an **xarray Dataset** per group on a shared time coordinate,
+  available as `FlightLog.data`. This replaces ~500 lines of per-type blocks
+  that addressed every measurement by slot number. The positional tuples are
+  derived from the Datasets and unchanged for now.
+- **`Raw_Profile` is now `FlightLog`**, in `profiles/flight.py`. It holds a
+  whole flight at native rate, not a profile, and the old name made it read
+  as a variant of `Profile`. `profiles.Raw_Profile` still imports, with a
+  `DeprecationWarning`.
+- `xarray` is a new dependency.
+
 ### Added
 
 - `test/` is a real suite: baseline characterization snapshots, grid
   invariants, and an a0 NetCDF round trip. Hermetic — uses `test/data/coefs`,
   never `~/.wxuas`, and makes no network calls.
 - `.github/workflows/tests.yml` runs it on Python 3.10 and 3.12.
+- A log carrying none of the required message types raises a `ValueError`
+  naming what is missing, rather than failing on `len(None)` deeper in.
 
 ### Known issues not addressed here
 
@@ -100,6 +122,19 @@ their mean and re-test, never going below two survivors.
   Pre-existing; `Raw_Profile` falls back to a filename derived from the input
   and does not.
 - RH per-sensor corrections are not applied at all (see `rh_calib`).
+- `_read_csv` is still the original hand-written parser. It has no test
+  coverage and no sample data in the repo, so it was left alone rather than
+  migrated to the schema on faith.
+- `copterID` 1 resolves to four different tail numbers in the live
+  `copterID.csv` (`FA3TANE3MF`, `FA3TANFWPA`, `FA3XEX7RKR`, `N944UA`) and
+  `get_tail_n` returns whichever is listed first. Their wind coefficients
+  differ (A 37.6 vs 32.8, B +6.8 vs -4.5), so retrieved wind speed depends
+  on row order in a CSV. Every current OK3DM flight logs `SYSID_THISMAV = 1`.
+- Current firmware no longer logs `USER_SENSORS` parameters, so sensor
+  serials fall back to 0 and `temp_calib` recomputes temperature from
+  resistance with *generic* coefficients - discarding the already-calibrated
+  `T1..T4` the autopilot logs. This is the onboard-calibration question and
+  belongs to Stage 5.
 
 - The repo's top-level `coefs/MasterCoefList.csv` cannot process the repo's
   own test flight: five rows per IMET sensor differing only by `ScoopID`,
