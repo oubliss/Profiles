@@ -88,12 +88,17 @@ def test_errors_can_be_raised_instead(config, tmp_path):
 
 
 def test_min_levels_discards_phantom_profiles(bin_path, config):
-    """flight616's second 'profile' is a 2 s, 1 m wiggle at the top."""
-    everything = all_profiles(process_flights([bin_path], config,
+    """flight616's second 'profile' is a 2 s, 1 m wiggle at the top. Detection
+    now rejects it; with that filter off, min_levels still must."""
+    default = all_profiles(process_flights([bin_path], config, compute=False))
+    assert len(default) == 1
+
+    unfiltered = ProcessingConfig(**{**config.__dict__, 'min_leg_extent': 0})
+    everything = all_profiles(process_flights([bin_path], unfiltered,
                                               compute=False))
     assert len(everything) == 2
 
-    strict = ProcessingConfig(**{**config.__dict__, 'min_levels': 141})
+    strict = ProcessingConfig(**{**unfiltered.__dict__, 'min_levels': 20})
     kept = all_profiles(process_flights([bin_path], strict, compute=False))
     assert len(kept) == 1
 

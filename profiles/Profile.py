@@ -2,7 +2,8 @@
 """
 Manages data from a single flight or profile
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import platform
 from profiles.unit_registry import units
 import profiles.utils as utils
 import profiles.qc as qc
@@ -13,10 +14,8 @@ import warnings
 from profiles.retrievals import thermo as thermo_retrieval
 from profiles.retrievals import wind as wind_retrieval
 import profiles
-import sys
 import os
 from profiles.flight import FlightLog
-from profiles.Coef_Manager import Coef_Manager
 from copy import deepcopy, copy
 import numpy as np
 import netCDF4
@@ -66,6 +65,10 @@ def _time_base_for(key, selectors):
         if fragment in key:
             return time_key
     return None
+
+
+class EmptyProfileError(ValueError):
+    """ A leg gridded to no levels, so there is no Profile to return. """
 
 
 class Profile():
@@ -148,34 +151,36 @@ class Profile():
         self._wind_data = self._raw_profile.wind_data().copy()
         self._thermo_data = self._raw_profile.thermo_data().copy()
         self.meta = self._raw_profile.meta
-        file_path = self._raw_profile.file_path
+        if file_path is None:
+            file_path = self._raw_profile.file_path
 
         if profile_start_height is not None:
             profile_start_height = profile_start_height * self._units.m
-        try:
-            if index_list is None:
+        if profile_num < 1:
+            raise ValueError(
+                f'profile_num is 1-based; got {profile_num}')
 
-                try:
-                    # Find the window where the scoop fan was active
-                    foo = np.where(np.array(self._thermo_data['fan_flag']) > 0)[0]
-                    fan_start = self._thermo_data['time_temp'][foo.min()]
-                    fan_stop = self._thermo_data['time_temp'][foo.max()]
+        if index_list is None:
+            # One leg finder for every entry point. This used to be a
+            # private copy with the raw fan window and no settle time, so a
+            # directly built Profile and process_flights disagreed.
+            # confirm_bounds is not forwarded: its default here is True,
+            # and peak detection has never plotted from this constructor
+            # (a blocking window per Profile). Plot via find_legs.
+            index_list = self._raw_profile.find_legs(
+                confirm_bounds=False, ascent=ascent,
+                profile_start_height=(None if profile_start_height is None
+                                      else profile_start_height.magnitude))
 
-                    index_list = utils.identify_profile_peaks(self._pos["alt_MSL"].magnitude, self._pos['time'],
-                                                              window=(fan_start, fan_stop))
-                except ValueError:
-                    index_list = utils.identify_profile(self._pos["alt_MSL"],
-                                                        self._pos["time"], confirm_bounds,
-                                                        profile_start_height=profile_start_height)
-
-            indices = index_list[profile_num - 1]
-        except IndexError:
-            print("Analysis shows that the given file has fewer than " +
-                  str(profile_num) + " profiles. If you are certain the file "
-                  + "does contain more profiles than we have found, try again "
-                  + "with a different starting height. \n\n")
-            return self.__init__(file_path, resolution, res_units, profile_num,
-                                 ascent=True, dev=False, confirm_bounds=True)
+        if profile_num > len(index_list):
+            # Raise rather than re-run the constructor: that re-parsed the
+            # file, found the same legs and recursed until RecursionError.
+            raise IndexError(
+                f'profile_num={profile_num} but only {len(index_list)} '
+                f'{"ascending" if ascent else "descending"} profile(s) were '
+                f'found in {file_path}. If the file does contain more, try '
+                f'a different profile_start_height or legacy_peak_id.')
+        indices = index_list[profile_num - 1]
 
         if ascent:
             self.indices = (indices[0], indices[1])
@@ -193,18 +198,37 @@ class Profile():
         self.ascent = ascent
         self._ascent_filename_tag = 'ascent' if ascent else 'descent'
 
-        if ".nc" in file_path or ".NC" in file_path:
-            self.file_path = file_path[:-3]
-        elif ".json" in file_path or ".JSON" in file_path:
-            self.file_path = file_path[:-5]
-        elif ".bin" in file_path or ".BIN" in file_path or ".csv" in file_path:
-            self.file_path = file_path[:-4]
+        # Match the extension itself: a substring test accepted any path
+        # containing ".nc" (e.g. "run.nc_old/x.bin"), had no ".cdf" branch
+        # although FlightLog reads it, and exited the interpreter on a miss.
+        root, extension = os.path.splitext(file_path)
+        if extension.lower() in ('.nc', '.cdf', '.json', '.bin', '.csv'):
+            self.file_path = root
         else:
-            print("File type not recognized")
-            sys.exit(0)
+            raise ValueError(
+                f'{file_path!r}: unrecognised extension {extension!r} '
+                f'(expected .bin, .json, .nc, .cdf or .csv)')
 
-        if(self.resolution.dimensionality ==
-           self._units.get_dimensionality('m')):
+        on_altitude = (self.resolution.dimensionality ==
+                       self._units.get_dimensionality('m'))
+
+        # profile_start_height is a height in metres. It used to take effect
+        # only through process_flights (which converted it to base_start),
+        # so profiles_from_flight and process_flights gridded the same
+        # flight differently.
+        self._base_start_given = base_start is not None
+        if base_start is None and profile_start_height is not None:
+            if on_altitude:
+                base_start = profile_start_height
+                self._base_start_given = True
+            else:
+                warnings.warn(
+                    f'profile_start_height is a height in metres and '
+                    f'cannot start a grid in {res_units}; ignoring it. '
+                    f'Pass base_start as a pressure to fix the first '
+                    f'edge.', UserWarning, stacklevel=2)
+
+        if on_altitude:
             base = self._pos['alt_MSL']
             base_time = self._pos['time']
 
@@ -228,6 +252,8 @@ class Profile():
 
         elif(self.resolution.dimensionality ==
              self._units.get_dimensionality('Pa')):
+            # The leg times are on the GPS clock; regrid_base maps them
+            # onto the barometer's own.
             base = self._pres[0]
             base_time = self._pres[1]
 
@@ -243,6 +269,27 @@ class Profile():
                                           units=self._units)
 
 
+        else:
+            raise ValueError(
+                f'res_units {res_units!r} is neither a length nor a '
+                f'pressure')
+
+        if len(self.time) == 0 or len(self.gridded_times) < 2:
+            raise EmptyProfileError(
+                f'the leg {self.indices[0]} to {self.indices[1]} grids to '
+                f'no levels at {self.resolution}')
+
+        # What the leg physically covers on the grid's vertical coordinate.
+        # n_populated_levels needs it: a short leg on a long common grid
+        # still has a full-length coordinate and, because the walk in
+        # regrid_base hands successive levels successive samples, bins that
+        # each hold a sample or two from a spot the leg never left.
+        first = utils.nearest_index(base_time, self.indices[0])
+        last = utils.nearest_index(base_time, self.indices[1])
+        covered = base[first:last + 1].magnitude
+        self._leg_range = (np.nanmin(covered) * base.units,
+                           np.nanmax(covered) * base.units)
+
         # The vertical coordinate at bin centres, whichever coordinate was
         # chosen. This is what the gridded variables are aligned to.
         if (self.resolution.dimensionality ==
@@ -251,35 +298,67 @@ class Profile():
         else:
             self.gridded_centers = self.pres
 
-        self._base_start = self.gridded_base[0]
+        # The lowest edge of the grid, which is what another flight needs to
+        # share these levels. An ascent is gridded bottom-up, a descent top
+        # down; on a pressure grid the lowest edge is the highest pressure.
+        edges = self.gridded_base.magnitude
+        self._base_start = self.gridded_base[int(np.nanargmin(edges)
+                                                 if on_altitude
+                                                 else np.nanargmax(edges))]
         try:
             self.copter_id = self._raw_profile.serial_numbers['copterID']
-            self.tail_number = Coef_Manager().get_tail_n(self.copter_id)
-        except Exception:
+        except KeyError:
             self.copter_id = -999
+        try:
+            # An explicit tail number wins; the registry is only consulted
+            # when none was given, through the flight's own source and date.
+            self.tail_number = self._raw_profile.resolve_tail_number()
+        except Exception:
+            # The copterID read above is still valid; only the registry
+            # lookup failed.
             self.tail_number = self._raw_profile.tail_number
 
 
         self.__load_pos__()
 
 
+    @property
+    def n_populated_levels(self):
+        """ Levels the leg actually reached and that hold data, as opposed
+        to levels that only exist because the grid was extended.
+
+        A short leg gridded onto a long common grid has a full-length
+        vertical coordinate, so len(gridded_centers) says nothing about
+        whether there is anything in the profile. A level counts when its
+        centre is within half a bin of the vertical range the leg covered
+        and at least one temperature sample was taken in its time bin.
+
+        :rtype: int
+        """
+        centers = self.gridded_centers
+        half = abs(self.resolution.to(centers.units).magnitude) / 2
+        low, high = (q.to(centers.units).magnitude for q in self._leg_range)
+        values = centers.magnitude
+        reached = (values >= low - half) & (values <= high + half)
+
+        stamps = np.asarray(self._thermo_data['time_temp'],
+                            dtype='datetime64[us]')
+        edges = np.asarray(self.gridded_times, dtype='datetime64[us]')
+        in_bin = (np.searchsorted(stamps, edges[1:], side='right')
+                  - np.searchsorted(stamps, edges[:-1], side='right'))
+        return int(np.sum(reached & (in_bin > 0)))
+
     def __load_pos__(self):
-        self.lat = []
-        self.lon = []
-        self.alt_MSL = []
-        for item in utils.regrid_data_group(data=list(zip(self._pos['lat'], self._pos['lon'], self._pos['alt_MSL'])), data_times=self._pos['time'], gridded_times=self.gridded_times):
-            self.lat.append(
-                np.nanmean(list(map(lambda latlon: latlon[0].magnitude, item['values'])))
-            )
-            self.lon.append(
-                np.nanmean(list(map(lambda latlon: latlon[1].magnitude, item['values'])))
-            )
-            self.alt_MSL.append(
-                np.nanmean(list(map(lambda latlon: latlon[2].magnitude, item['values'])))
-            )
-        self.lat =  np.array(self.lat) * units.deg
-        self.lon =  np.array(self.lon) * units.deg
-        self.alt_MSL =  np.array(self.alt_MSL) * units.m 
+        # Same (start, end] bins as every other gridded variable.
+        def _grid(key, unit):
+            return utils.regrid_data(
+                data=self._pos[key], data_times=self._pos['time'],
+                gridded_times=self.gridded_times,
+                units=self._units).to(unit)
+
+        self.lat = _grid('lat', units.deg)
+        self.lon = _grid('lon', units.deg)
+        self.alt_MSL = _grid('alt_MSL', units.m)
 
     def lowpass_filter(self, wind=True, thermo=True, Fs=10., Fc=0.1, n=501):
         """
@@ -463,7 +542,8 @@ class Profile():
 
         temp_raw = calibration.calibrate_temperature(
             data, serial_numbers, record=self.calibration_record,
-            source=self._raw_profile.calibration_source)
+            source=self._raw_profile.calibration_source,
+            when=self._raw_profile.start_time)
         rh_raw = calibration.calibrate_humidity(data, serial_numbers)
 
         self.temp_flags = qc.qc(temp_raw, *self.qc_thresholds['temp'])
@@ -508,8 +588,9 @@ class Profile():
 
         data = self._trim(self._wind_data, _WIND_TIME_BASES)
         equation_name = wind_retrieval.ALGORITHM_EQUATIONS[algorithm]
-        coefficients = utils.coef_manager.get_coefs(
-            'Wind', self.tail_number, equation_name)
+        coefficients = self._raw_profile.calibration_source.get_coefs(
+            'Wind', self.tail_number, equation_name,
+            when=self._raw_profile.start_time)
         self.calibration_record['wind'] = coefficients
 
         direction, speed = wind_retrieval.retrieve(
@@ -641,11 +722,9 @@ class Profile():
         Td_var.units = str(self.T_d.units)
         # Q
         q_var = main_file.createVariable("q", "f8", ("time",))
-        # q comes back from MetPy as kg/kg and is labelled gPerKg, so it
-        # needs the same * 1e3 the combined c1 writer applies. Without it
-        # this file claimed g/kg while holding kg/kg - wrong by 1000.
-        q_var[:] = self.q.magnitude * 1e3
-        q_var.units = str(self.q.units)
+        # q is held in kg/kg; the files report g/kg.
+        q_var[:] = self.q.to('g/kg').magnitude
+        q_var.units = 'g/kg'
         # LAT
         lat_var = main_file.createVariable("lat", "f8", ("time",))
         lat_var[:] = self.lat.magnitude
@@ -735,15 +814,53 @@ class Profile():
 
         main_file.close()
 
-    def save_netcdf(self, file_path=None):
+    def _set_identity(self, handle):
+        """ copter_id and tail_number, skipping whichever is unresolved
+        (netCDF4 cannot store None)."""
+        for name in ('copter_id', 'tail_number'):
+            value = getattr(self, name, None)
+            if value is not None:
+                handle.setncattr(name, value)
+
+    @staticmethod
+    def _set_created(handle):
+        handle.setncattr('datafile_created_on_date',
+                         datetime.now(timezone.utc).replace(tzinfo=None)
+                         .isoformat())
+        handle.setncattr('datafile_created_on_machine', platform.node())
+
+    def _c1_output_path(self, file_path, tag):
+        """ Where a combined c1 file goes.
+
+        An explicit .nc/.cdf path wins; otherwise the name comes from
+        metadata, or - with none - from the input file's path, as the a0
+        writer does. The two combined writers pass different tags so that
+        calling both does not overwrite one with the other.
+
+        :param str file_path: the caller's path, or None for the input's
+        :param str tag: product tag, e.g. 'ascent' or 'cf_ascent'
+        :rtype: str
+        """
         if file_path is None:
             file_path = self.file_path
-
-        file_name = profile_io.resolve(
+        resolution = self.resolution.magnitude
+        return profile_io.resolve(
             file_path, self.meta, 'c1',
             self.time[0].strftime("%Y%m%d.%H%M%S"),
-            resolution=self.resolution.magnitude,
-            tag=self._ascent_filename_tag)
+            resolution=resolution, tag=tag,
+            fallback=f'{file_path}.c1.{resolution}.{tag}.nc')
+
+    def save_netcdf(self, file_path=None, lookup_place=False):
+        """ Write the combined c1 file.
+
+        :param str file_path: an explicit .nc/.cdf path, or None to name
+           the file from metadata (or the input file when there is none)
+        :param bool lookup_place: also record a place name for the first
+           fix as ``flight_location``. This asks a public web service
+           (OpenStreetMap Nominatim), so it is off by default: a writer
+           should not need a network, and a failed lookup only warns.
+        """
+        file_name = self._c1_output_path(file_path, self._ascent_filename_tag)
 
         if not (self._wind_computed or self._thermo_computed):
             print("No wind or thermo data to save; call compute_thermo() "
@@ -755,16 +872,20 @@ class Profile():
         # Vital ncattrs
         main_file.setncattr("conventions", "NC-1.8")
         main_file.setncattr("processing_version", profiles.__version__)
-        main_file.setncattr("copter_id", self.copter_id)
-        main_file.setncattr("tail_number", self.tail_number)
-        
-        try:
-            main_file.setncattr("flight_location", utils.get_place_from_lat_lon(self.lat[0].magnitude, self.lon[0].magnitude))
-        except Exception:
-            pass 
-        
-        main_file.setncattr('datafile_created_on_date', datetime.utcnow().isoformat())
-        main_file.setncattr('datafile_created_on_machine',  os.uname().nodename)
+        self._set_identity(main_file)
+
+        if lookup_place:
+            try:
+                main_file.setncattr("flight_location",
+                                    utils.get_place_from_lat_lon(
+                                        self.lat[0].magnitude,
+                                        self.lon[0].magnitude))
+            except Exception as error:
+                warnings.warn(f'place lookup failed, flight_location not '
+                              f'written: {error}', RuntimeWarning,
+                              stacklevel=2)
+
+        self._set_created(main_file)
         main_file.setncattr('processing_level', 'c1')
 
         # Which coefficients, which thresholds, which table revision.
@@ -850,8 +971,8 @@ class Profile():
             Td_var.long_name = "Dew point temperature"
             # Q
             q_var = main_file.createVariable("q", "f8", ("time",))
-            q_var[:] = self.q.magnitude * 1e3
-            q_var.units = str(self.q.units)
+            q_var[:] = self.q.to('g/kg').magnitude
+            q_var.units = 'g/kg'
             q_var.long_name = "Specific humidity"
 
         if self._wind_computed:
@@ -885,14 +1006,15 @@ class Profile():
         return None
 
     def save_cfnetcdf(self, platform_name, terrain_elevation, file_path=None):
-        if file_path is None:
-            file_path = self.file_path
+        """ Write the combined c1 file with CF-1.8 / WMO-CF attributes.
 
-        file_name = profile_io.resolve(
-            file_path, self.meta, 'c1',
-            self.time[0].strftime("%Y%m%d.%H%M%S"),
-            resolution=self.resolution.magnitude,
-            tag=self._ascent_filename_tag)
+        :param str platform_name: platform identifier, e.g. the tail number
+        :param terrain_elevation: site terrain elevation, in metres
+        :param str file_path: an explicit .nc/.cdf path, or None to name
+           the file from metadata (or the input file when there is none)
+        """
+        file_name = self._c1_output_path(
+            file_path, 'cf_' + self._ascent_filename_tag)
 
         if not (self._wind_computed or self._thermo_computed):
             print("No wind or thermo data to save; call compute_thermo() "
@@ -910,11 +1032,8 @@ class Profile():
         main_file.setncattr("site_terrain_elevation_height", terrain_elevation)
         main_file.setncattr("processing_level", 'c1')
         main_file.setncattr("processing_version", profiles.__version__)
-        main_file.setncattr("copter_id", self.copter_id)
-        main_file.setncattr("tail_number", self.tail_number)
-
-        main_file.setncattr('datafile_created_on_date', datetime.utcnow().isoformat())
-        main_file.setncattr('datafile_created_on_machine', os.uname().nodename)
+        self._set_identity(main_file)
+        self._set_created(main_file)
 
         for name, value in profile_io.provenance_attributes(self).items():
             main_file.setncattr(name, value)
@@ -924,7 +1043,7 @@ class Profile():
                                           " into the development of a smart unmanned aircraft system for atmospheric "
                                           "boundary layer research. Atmospheric Measurement Techniques, 13, 2833–2848, "
                                           "https://doi.org/10.5194/amt-13-2833-2020.")
-        main_file.setncattr("Reference1", "Bell, T. M., B. R. Greene, P. M. Klein, M. Carney, and "
+        main_file.setncattr("Reference2", "Bell, T. M., B. R. Greene, P. M. Klein, M. Carney, and "
                                           "P. B. Chilson, 2020: Confronting the boundary layer data gap: evaluating new "
                                           "and existing methodologies of probing the lower atmosphere. Atmospheric "
                                           "Measurement Techniques, 13, 3855–3872, https://doi.org/10.5194/amt-13-3855-2020.")
@@ -932,10 +1051,18 @@ class Profile():
         # Create the dimensions
         main_file.createDimension("obs", None)
 
+        # featureType trajectory needs a variable carrying cf_role; with one
+        # flight per file it is a scalar.
+        trajectory = main_file.createVariable('trajectory_id', str, ())
+        trajectory.setncattr('cf_role', 'trajectory_id')
+        trajectory.setncattr('long_name', 'flight identifier')
+        trajectory[...] = f'{platform_name}_{self.gridded_times[0]}'
+
         # TIME
         # Be sure to use self.time instead of self.gridded_times since we want to store the mean time between two levels
         # of gridded times
-        time_var = main_file.createVariable("time", "i8", ("obs",))
+        # f8: bin centres fall between whole seconds, which i8 truncated.
+        time_var = main_file.createVariable("time", "f8", ("obs",))
         time_var[:] = netCDF4.date2num(self.time,
                                        units='seconds since 1970-01-01T00:00:00')
         time_var.units = 'seconds since 1970-01-01T00:00:00'
@@ -962,8 +1089,8 @@ class Profile():
         # ALT
         alt_var = main_file.createVariable("altitude", "f8", ("obs",))
         alt_var.units = str(self.alt.units)
-        alt_var.setncattr('long_name', 'altitude_above_sea_level')
-        alt_var.setncattr('standard_name', 'altitude_above_sea_level')
+        alt_var.setncattr('long_name', 'altitude above mean sea level')
+        alt_var.setncattr('standard_name', 'altitude')
         alt_var.setncattr('positive', 'up')
         alt_var.setncattr('axis', 'Z')
         alt_var[:] = self.alt.magnitude
@@ -971,10 +1098,8 @@ class Profile():
         # PRES
         pres_var = main_file.createVariable("pressure", "f8", ("obs",))
         pres_var.units = str(self.pres.units)
-        pres_var.setncattr('long_name', 'air_pressure')
-        pres_var.setncattr('standard_name', 'pressure')
-        pres_var.setncattr('positive', 'up')
-        pres_var.setncattr('axis', 'Z')
+        pres_var.setncattr('long_name', 'air pressure')
+        pres_var.setncattr('standard_name', 'air_pressure')
         pres_var[:] = self.pres.magnitude
 
         # LAT
@@ -1024,8 +1149,8 @@ class Profile():
             Td_var.standard_name = "dew_point_temperature"
             # # Q
             # q_var = main_file.createVariable("q", "f8", ("time",))
-            # q_var[:] = self.q.magnitude * 1e3
-            # q_var.units = str(self.q.units)
+            # q_var[:] = self.q.to('g/kg').magnitude
+            # q_var.units = 'g/kg'
             # q_var.long_name = "Specific humidity"
 
         if self._wind_computed:

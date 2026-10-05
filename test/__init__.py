@@ -1,8 +1,16 @@
 import pathlib
+import warnings
 from os.path import join
 
-from profiles.conf import coef_info
 import profiles.utils as utils
+
+# profiles.conf is the deprecated way to point the package at coefficients;
+# the fixture below still needs it until the shim is removed, so this one
+# import is allowed to warn. (Anywhere else in the suite a DeprecationWarning
+# is an error - see pytest.ini.)
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', DeprecationWarning)
+    from profiles.conf import coef_info
 
 TEST_DIR = pathlib.Path(__file__).resolve().parent
 BASE_TEST_PATH = TEST_DIR / 'data'

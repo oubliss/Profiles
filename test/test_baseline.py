@@ -41,20 +41,41 @@ def test_matches_baseline(bin_path, variant, lowpass):
     expected = np.load(snapshot_path)
     actual = run_reference_pipeline(bin_path, lowpass=lowpass)
 
-    missing = sorted(set(expected.files) - set(actual))
-    added = sorted(set(actual) - set(expected.files))
+    # The snapshot predates the minimum leg extent and records the 2-second,
+    # 1.1 m "phantom" leg at the top of the real profile as profile 1 (and
+    # n_profiles == 2). Phantom legs are now rejected at detection, on
+    # purpose, so the flight yields one profile. Profile 0 is still compared
+    # array for array against the original capture, un-re-captured.
+    assert float(actual['n_profiles'][0]) == 1.0
+    assert float(expected['n_profiles'][0]) == 2.0
+    retired = [n for n in expected.files
+               if n == 'n_profiles' or n.startswith('p1.')]
+    expected_files = [n for n in expected.files if n not in retired]
+    actual = {k: v for k, v in actual.items() if k != 'n_profiles'}
+
+    missing = sorted(set(expected_files) - set(actual))
+    added = sorted(set(actual) - set(expected_files))
     assert not missing, f'variables disappeared from the output: {missing}'
     assert not added, f'variables appeared in the output: {added}'
 
+    # Position used to be binned [start, end) by its own helper while every
+    # other variable was (start, end]. They now share one rule, so lat/lon/
+    # alt_MSL moved by up to 4.5e-8 deg (lat, one element; ~5 mm) and 0.36 m
+    # (alt_MSL, every element; a one-sample shift of the bin edge against a
+    # climbing aircraft). Only those keys get an absolute tolerance sized
+    # just above that; everything else is still compared at rtol 1e-9.
+    position_atol = {'lat': 1e-7, 'lon': 1e-7, 'alt_MSL': 0.5}
+
     differences = []
-    for name in expected.files:
+    for name in expected_files:
         want, got = expected[name], np.asarray(actual[name])
+        atol = position_atol.get(name.rsplit('.', 1)[-1], 0)
         if want.shape != got.shape or not np.allclose(
-                want, got, rtol=1e-9, atol=0, equal_nan=True):
+                want, got, rtol=1e-9, atol=atol, equal_nan=True):
             differences.append(_describe(name, want, got))
 
     assert not differences, (
-        f'{len(differences)} of {len(expected.files)} arrays changed:\n  '
+        f'{len(differences)} of {len(expected_files)} arrays changed:\n  '
         + '\n  '.join(differences)
         + '\n\nIf this is intentional, re-capture with '
           '`python -m test.capture_baseline` and list these in the commit.')

@@ -8,6 +8,7 @@ be re-captured deliberately with ``python -m test.capture_baseline`` and
 explained in the commit message.
 """
 import shutil
+import warnings
 from collections import OrderedDict
 
 import numpy as np
@@ -69,11 +70,15 @@ def run_reference_pipeline(bin_path, lowpass=False):
     """
     from profiles import Profile_Set
 
-    profile_set = Profile_Set.Profile_Set(
-        resolution=RESOLUTION, res_units=RES_UNITS, ascent=True, dev=True,
-        confirm_bounds=False, nc_level=None,
-        profile_start_height=PROFILE_START_HEIGHT)
-    profile_set.add_all_profiles(str(bin_path))
+    # This module exists to exercise the deprecated Profile_Set on purpose;
+    # test_baseline_v2 holds the supported entry point to the same snapshot.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', DeprecationWarning)
+        profile_set = Profile_Set.Profile_Set(
+            resolution=RESOLUTION, res_units=RES_UNITS, ascent=True,
+            dev=True, confirm_bounds=False, nc_level=None,
+            profile_start_height=PROFILE_START_HEIGHT)
+        profile_set.add_all_profiles(str(bin_path))
 
     out = OrderedDict()
     out['n_profiles'] = np.array([float(len(profile_set.profiles))])

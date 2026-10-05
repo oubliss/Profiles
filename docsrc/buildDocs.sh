@@ -16,10 +16,14 @@ set -x
 # INSTALL DEPENDS #
 ###################
 
+# The image is python:3.12-slim-bookworm (see the workflow). Python packages
+# come from pip rather than Debian's python3-* so versions match setup.py's
+# requirement of Python >= 3.10, which Debian buster (3.7) cannot satisfy.
 apt-get update
-apt-get -y install git rsync python3-dev python3-sphinx python3-sphinx-rtd-theme python3-stemmer python3-git python3-pip python3-virtualenv python3-setuptools python3-lxml libhdf5-dev python3-h5py libnetcdf-dev
+apt-get -y install git rsync
 
-python3 -m pip install --upgrade rinohtype pygments
+python3 -m pip install --upgrade pip
+python3 -m pip install --upgrade sphinx sphinx-rtd-theme rinohtype pygments GitPython
 
 python3 -m pip install .
 

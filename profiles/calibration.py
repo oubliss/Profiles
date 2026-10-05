@@ -22,17 +22,30 @@ from profiles import Coef_Manager, schema
 
 
 def _sensor_series(thermo_data, prefix):
-    """Per-sensor arrays for a prefix, in sensor order, skipping absent ones."""
-    series = []
-    for number in range(1, schema.N_SENSORS + 1):
-        key = f'{prefix}{number}'
-        if key in thermo_data:
-            series.append(thermo_data[key].magnitude)
-    return series
+    """ Per-sensor arrays for a prefix, one per sensor slot.
+
+    The list index is the sensor number minus one, always: a sensor missing
+    from thermo_data comes back as an all-NaN array of the same length as
+    the others, not as a gap that shifts every later sensor down a slot.
+    Callers pair these with serial numbers and output variables by slot, and
+    the ensemble QC treats an all-NaN series as an empty position.
+
+    :rtype: list[np.ndarray]
+    :return: N_SENSORS arrays, or [] if no sensor with this prefix is present
+    """
+    present = {number: np.asarray(thermo_data[f'{prefix}{number}'].magnitude,
+                                  dtype=float)
+               for number in range(1, schema.N_SENSORS + 1)
+               if f'{prefix}{number}' in thermo_data}
+    if not present:
+        return []
+    length = len(next(iter(present.values())))
+    return [present.get(number, np.full(length, np.nan))
+            for number in range(1, schema.N_SENSORS + 1)]
 
 
 def calibrate_temperature(thermo_data, serial_numbers, record=None,
-                          source=None):
+                          source=None, when=None):
     """ Per-sensor temperature in K.
 
     Which path is taken is decided by the calibration source, not by what
@@ -53,7 +66,10 @@ def calibrate_temperature(thermo_data, serial_numbers, record=None,
     :param dict record: if given, the coefficient row used for each sensor
        is stored here under 'imet<n>', for output provenance
     :param source: a CalibrationSource. Resolved from the log's serial
-       numbers when omitted.
+       numbers when omitted. Every coefficient lookup goes through it, so
+       the directory it was built with is the one that decides the numbers.
+    :param when: the flight's start time, to select among dated coefficient
+       rows for a recalibrated sensor
     :rtype: list[np.ndarray]
     """
     if source is None:
@@ -77,14 +93,17 @@ def calibrate_temperature(thermo_data, serial_numbers, record=None,
 
     calibrated = []
     for i, values in enumerate(resistances):
+        if f'resi{i + 1}' not in thermo_data:
+            # Absent slot: stays NaN so the list index remains the sensor.
+            calibrated.append(values)
+            continue
         serial = serial_numbers[f'imet{i + 1}']
-        calibrated.append(utils.temp_calib(values, serial))
+        # One lookup serves both the arithmetic and the provenance record,
+        # so what is recorded is what was applied.
+        coefs = source.get_coefs('Imet', serial, when=when)
+        calibrated.append(utils.steinhart_hart(values, coefs))
         if record is not None:
-            try:
-                record[f'imet{i + 1}'] = utils.get_coef_manager().get_coefs(
-                    'Imet', serial)
-            except Exception as exc:          # provenance must never break
-                record[f'imet{i + 1}'] = {'error': str(exc)}
+            record[f'imet{i + 1}'] = coefs
     return calibrated
 
 
@@ -96,4 +115,5 @@ def calibrate_humidity(thermo_data, serial_numbers):
     :rtype: list[np.ndarray]
     """
     return [utils.rh_calib(values, serial_numbers[f'rh{i + 1}'])
+            if f'rh{i + 1}' in thermo_data else values
             for i, values in enumerate(_sensor_series(thermo_data, 'rh'))]

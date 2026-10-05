@@ -175,7 +175,10 @@ class TestBiasCorrections:
 
     def test_provenance_records_every_coefficient(self):
         attributes = bias.get('rh_poly22_uncorrected_t').provenance()
-        assert attributes['rh_bias_correction'] == 'rh_poly22_uncorrected_t'
+        assert 'rh_bias_correction' not in attributes
+        assert attributes['rh_bias_correction_requested'] == \
+            'rh_poly22_uncorrected_t'
+        assert attributes['rh_bias_correction_applied'] == 'no'
         assert attributes['rh_bias_p10'] == 1.1893
         assert attributes['rh_bias_fitted_rh_range'] == [20., 95.]
 
@@ -222,7 +225,9 @@ class TestTemperatureStrategy:
         data = self.thermo_data()
         result = calibration.calibrate_temperature(
             data, self.serials(), source=OnboardCalibration(COEF_PATH))
-        for n, series in enumerate(result, start=1):
+        # Slot-aligned: the fixture has no sensor 4, which stays NaN.
+        assert len(result) == 4 and np.isnan(result[3]).all()
+        for n, series in enumerate(result[:3], start=1):
             assert np.allclose(series, 290.0 + n), (
                 'onboard calibration must not alter the logged temperature')
 

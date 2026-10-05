@@ -96,10 +96,16 @@ class SurfaceCorrection:
     def provenance(self):
         """ Attributes describing this correction, for the output file.
 
+        Nothing in the pipeline applies a bias correction yet - choosing to
+        is a scientific decision that has not been made - so the file says
+        it was requested and was not applied. Writing the bare name used to
+        make a c1 file read as though its RH had been corrected.
+
         :rtype: dict
         """
         attributes = {
-            'rh_bias_correction': self.name,
+            'rh_bias_correction_requested': self.name,
+            'rh_bias_correction_applied': 'no',
             'rh_bias_correction_source': self.source,
             'rh_bias_correction_form':
                 ' + '.join(f'p{i}{j}*rh^{i}*temp^{j}'

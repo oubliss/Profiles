@@ -60,10 +60,13 @@ def test_records_processing_identity(written):
         assert 'coefficient_revision' in handle.ncattrs()
 
 
-def test_records_the_bias_correction_even_though_it_is_not_applied(written):
+def test_records_the_bias_correction_as_requested_not_applied(written):
     _, path = written
     with netCDF4.Dataset(path) as handle:
-        assert handle.getncattr('rh_bias_correction') == 'rh_poly22_corrected_t'
+        assert 'rh_bias_correction' not in handle.ncattrs()
+        assert handle.getncattr('rh_bias_correction_requested') == \
+            'rh_poly22_corrected_t'
+        assert handle.getncattr('rh_bias_correction_applied') == 'no'
         assert handle.getncattr('rh_bias_p10') == pytest.approx(1.1894)
         np.testing.assert_allclose(
             handle.getncattr('rh_bias_fitted_rh_range'), [20., 95.])

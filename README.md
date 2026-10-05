@@ -17,6 +17,11 @@ for profile in all_profiles(results):
     profile.save_cfnetcdf('N934UA', terrain_elevation=340)
 ```
 
+With no metadata and no explicit path, the file is written beside the input
+as `<input>.c1.<resolution>.cf_ascent.nc` (`save_netcdf` writes
+`<input>.c1.<resolution>.ascent.nc`, so calling both keeps both). Pass
+`file_path='out.nc'` to choose the name.
+
 `.BIN` files are read directly. One `Profile` holds the whole gridded
 profile — temperature, humidity, wind and the derived quantities — so there
 are no separate thermo and wind objects to fetch.
@@ -94,8 +99,37 @@ ProcessingConfig(calibration='table')    # or 'onboard', default 'auto'
 
 The path taken is written to c1 files as `coef_temperature_source`.
 
-Bias corrections (`profiles/bias.py`) are separate and remain opt-in; they
-apply on top of either source.
+The source also decides *which coefficients*: every temperature, wind and
+tail-number lookup goes through `flight.calibration_source`. Point it at a
+directory with `FlightLog(..., coefficient_dir=...)`,
+`ProcessingConfig(coefficient_dir=...)`, or by assigning a
+`TableCalibration(directory)` to `flight.calibration_source`. Rows with
+`ValidFrom`/`ValidTo` are selected by the flight's start time
+(`flight.start_time`). An explicit `tail_number` always overrides the
+copterID registry. The directory, source and lookup time are recorded in c1
+files (`coefficient_directory`, `calibration_source`,
+`coefficient_lookup_time`).
+
+## Which barometer
+
+Current firmware logs every barometer as `BARO` with an instance field `I`;
+which one is in the scoop depends on the airframe. `ProcessingConfig(baro_instance=1)`
+(default 1, also `FlightLog(..., baro_instance=)`) picks it, and
+`ekf_core=0` picks the EKF core (`XKF1` field `C`). If the log has
+instance-numbered barometers but not the requested one, processing raises
+an error listing the instances present; it never falls back silently.
+
+Old logs with separate `BARO` and `BAR2` messages and no instance field
+always use `BAR2` (the external barometer), and the setting does not apply
+to them. The instance used is written to the a0 file and to c1 files as
+`baro_instance` (with `baro_message_type`); both are absent when the log
+numbers no barometers. Passing an already-parsed `flight=` to
+`profiles_from_flight` uses that log's own choice.
+
+Bias corrections (`profiles/bias.py`) are **not applied** by the pipeline.
+Naming one in `ProcessingConfig(bias_correction=...)` records it in the c1
+file as `rh_bias_correction_requested` with `rh_bias_correction_applied = no`,
+and processing warns.
 
 ## Processing levels
 
@@ -106,8 +140,13 @@ apply on top of either source.
 | c1 | gridded profile, with QC flags and coefficient provenance |
 
 c1 files record which coefficients produced them, the QC thresholds in
-force, the coefficient table's git revision, and per-sensor QC flags as CF
+force, the coefficient table's git revision (the last commit that changed
+`MasterCoefList.csv`, suffixed `-dirty` if it has uncommitted edits) and its
+SHA-256 (`coefficient_sha256`), and per-sensor QC flags as CF
 `flag_values` / `flag_meanings`.
+
+`Profile.save_netcdf(lookup_place=True)` additionally records a place name
+for the first fix; that asks OpenStreetMap Nominatim, so it is off by default.
 
 ## Tests
 

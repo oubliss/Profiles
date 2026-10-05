@@ -95,6 +95,32 @@ coefficients. Wind remains a table lookup; the airframe calibration is per
 tail number and is not applied onboard. The path taken is recorded in the
 output as `coef_temperature_source`.
 
+**Current-firmware logs merged redundant sensors into one series.**
+ArduPilot 4.x logs every barometer as `BARO` and every EKF core as `XKF1`,
+distinguished only by an instance field (`I`, `C`); the schema assumed one of
+each (and a separate `BAR2` for the external barometer), so the parser
+interleaved all copies. On OK3DM flight2862 that meant **7688** pressure
+samples (two barometers, 3844 each, no `BAR2`) differing by **94.5 Pa** on
+average, and **11532** rotation samples (three EKF cores) with **7688**
+duplicate timestamps. Groups now declare an `Instance(field, keep)`: pressure
+keeps `BARO` instance 1, rotation keeps core 0, and each group is back to
+3844 samples with strictly increasing times. The IMU's ad-hoc `I == 0` filter
+uses the same mechanism. Logs without the field (flight616: `BARO` + `BAR2`,
+`NKF1`) are untouched. Override with `parse(..., instances={'pres': 0})`; the
+chosen instance is recorded as `source_instance` beside `source_message_type`.
+**Which barometer is the scoop sensor is not recorded in the log and the
+default needs confirming per airframe.** On flight2862 instance 1 is the
+cooler (33.2 C vs 47.1 C die temperature) and more variable (std 1.00 vs
+0.24 C) one, the same signature `BAR2` has against `BARO` in flight616
+(40.1 vs 44.6 C; 0.54 vs 0.13 C).
+
+**ESC RPM merged motors on current firmware.** Motors were `Instance % 4`;
+flight2862 logs instances 8, 9, 11, 12, which became 0, 1, 3, 0 — two motors
+averaged together and one empty — and the reshape assumed exactly four
+messages per step. Motors are now the sorted set of observed instances,
+numbered 1..N, and a timestep ends when an instance repeats, so a dropped
+message leaves a NaN instead of shifting every later sample.
+
 ### Fixed
 
 - `import profiles` no longer reads the filesystem. `utils.coef_manager` was
@@ -130,6 +156,163 @@ output as `coef_temperature_source`.
   `A` coefficient and then overwrote the result with `0` on the next line, so
   no offset has ever reached the data. Behaviour is unchanged; the docstring
   now records what has to be settled before a correction is reinstated.
+- **a0 files corrupted temperature on read-back (about +100 K).**
+  `FlightLog._save_netCDF` wrote temperatures in K as `volt<n>` labelled "mV"
+  and never wrote resistances; `_read_netCDF` read them as millivolts into a
+  tuple with no resistance slots, so `thermo_data()` paired the wrong
+  arrays. It now writes `temp<n>` and `resi<n>` with the units the values
+  carry and rebuilds the same tuples a `.BIN` gives, so reprocessing from an
+  a0 file reproduces the gridded profile. RH-sensor and barometer
+  temperatures were labelled "F", which pint reads as farad; they now carry
+  `kelvin` and `degree_Fahrenheit`. **a0 files written by earlier 1.4.0-dev
+  builds have mislabelled temperatures**: they are still read (`volt<n>` is
+  taken as K, resistances come back NaN, "F" falls back to the right unit)
+  but should be regenerated from the log.
+- a0 writer and reader now agree on what is optional. The reader no longer
+  raises `KeyError` on logs with no `wind` or `events` group (pre-2021), the
+  writer no longer raises on a log with no `copterID`, every serial number
+  (including `wind`), rpm and the calibrated `calib_*` groups are read back,
+  and message text is stored as variable-length strings instead of `'<U13'`,
+  which cut anything longer.
+- The a0 fallback name could be the input log itself: `FLIGHT.JSON` or
+  `x.Bin` matched none of the `.replace()` patterns, so the log was opened
+  for writing and truncated. The name now comes from `os.path.splitext`, and
+  `_save_netCDF` raises `ValueError` rather than write over its input.
+- `Profile` matched file extensions by substring, had no `.cdf` branch
+  although `FlightLog` reads one, and called `sys.exit(0)` on an unknown
+  type. It now compares the extension, accepts `.cdf`, and raises
+  `ValueError`. `utils.regrid_data` likewise raises instead of exiting the
+  interpreter.
+- The flight's calibration source now decides the *coefficients*, not only
+  the path. Temperature, wind and tail-number lookups all went through a
+  process-global `Coef_Manager` built from the first directory configured, so
+  `TableCalibration(directory=...)` and `flight.calibration_source = ...` had
+  no effect on the numbers, `OnboardCalibration`'s refusal was never reached,
+  and provenance reported the global directory. Every lookup now goes through
+  `FlightLog.calibration_source`; `FlightLog` and `ProcessingConfig` accept
+  `coefficient_dir=`. `utils.coef_manager`/`get_coef_manager` remain but warn
+  `DeprecationWarning`. c1 files record the source's directory and class
+  (`coefficient_directory`, `calibration_source`).
+  Numbers are unchanged for a table without validity dates.
+- Dated coefficient rows are now selected. No caller passed `when=`, so a
+  sensor with two dated rows raised `AmbiguousCoefficients`. The flight's
+  first valid timestamp (`FlightLog.start_time`) is threaded into every
+  lookup and written as `coefficient_lookup_time`.
+- An explicit `tail_number` (`FlightLog(tail_number=...)`,
+  `ProcessingConfig.tail_number`) now wins. `Profile` always looked up the
+  log's copterID and used the explicit value only if that lookup failed, so
+  a flight forced to `N944UA` was processed and labelled as `N934UA`.
+- c1 files no longer claim an RH bias correction that was never applied.
+  `ProcessingConfig.bias_correction` has only ever been recorded; nothing
+  applies it (that is a scientific decision not yet made), yet the file
+  carried `rh_bias_correction` and its coefficients as if it had been. The
+  file now says `rh_bias_correction_requested` and
+  `rh_bias_correction_applied = 'no'`, and processing warns. The old
+  `rh_bias_correction` attribute is gone.
+- **Descent processing (`ascent=False`) works.** It raised `IndexError`
+  (`regrid_base` read a third index the 2-tuple leg does not have), and would
+  have gridded to nothing even past that because the grid and the level walk
+  assumed altitude rises along the leg. A descent is now gridded in flight
+  order: the first level is the top, altitude falls down the arrays, and the
+  edge times increase along the leg so `regrid_data`'s (start, end] bins are
+  unchanged. Levels sit on the same `base_start + n*res` lattice as an
+  ascent, so an ascent and a descent can share a grid. `Profile._base_start`
+  is now the lowest edge for either direction (it was `gridded_base[0]`).
+  Ascents are bit-identical to before.
+- **Pressure grids (`res_units='hPa'`/`'Pa'`) work.** `regrid_base` looked
+  the GPS leg times up in the barometer's clock with `list.index`, which
+  raised `ValueError`. They are now mapped to the nearest sample on the
+  base's own clock (`utils.nearest_index`). The resolution is also converted
+  to the base's units: 5 hPa against a barometer in Pa used to step 5 Pa.
+  `profile_start_height` is a height in metres and is ignored, with a
+  warning, on a pressure grid; pass `base_start` as a pressure instead.
+- **Phantom legs are not emitted.** `FlightLog.find_legs` takes `min_extent`
+  (metres, default `FlightLog.MIN_LEG_EXTENT` = 50; `ProcessingConfig
+  .min_leg_extent`, 0 disables) and `ascent`, and drops peak-detected legs
+  that do not climb (descend, for `ascent=False`) that far. It is measured
+  in the direction processed because the legs are valley-peak-valley
+  triples: flight616's 1.1 m wiggle is a good *descent* (its "end" is the
+  bottom of the real descent) and the real leg's own descent is a 27 m dip.
+  Evidence for 50 m: flight616 and the 2026 OK3DM logs that parse have real
+  profiles of 76 m to 1420 m; the only other legs are 1-27 m. The legacy
+  finder is not filtered. flight616 now yields one ascending profile, not
+  two; profile 0 is unchanged. (The descent of that flight is the *second*
+  leg, and it now yields one profile too.)
+- `ProcessingConfig.min_levels` counts levels that hold data
+  (`Profile.n_populated_levels`: the leg reached the level and a
+  temperature sample falls in its time bin), not the length of the grid.
+  On a common grid a short leg used to keep a full-length vertical
+  coordinate and pass.
+- `profiles_from_flight` and `process_flights` grid identically.
+  `profile_start_height` was honoured only by `process_flights`, so
+  flight616 gridded to 141 levels through one and 142 through the other;
+  `Profile` now applies it itself.
+- A leg that grids to no levels is never returned as a `Profile`
+  (`Profile` raises `EmptyProfileError`, a `ValueError`;
+  `profiles_from_flight` skips it with a warning). Such a `Profile` used to
+  crash in `__str__` and the writers on `time[0]`.
+- `Profile.__init__` no longer has its own leg finder. It calls
+  `FlightLog.find_legs`, so a directly constructed `Profile` and
+  `process_flights` pick the same legs (the private copy lacked the 5 s
+  sensor settle). A `profile_num` past the legs found raises `IndexError`
+  naming the count, instead of re-running the constructor without
+  `index_list`/`raw_profile`/`metadata` and recursing until
+  `RecursionError`; `profile_num < 1` raises `ValueError` rather than
+  indexing from the end. `Profile` still does not plot detected peaks when
+  `confirm_bounds=True` (its default), as before.
+- `utils.identify_profile` passed `to_return` positionally into
+  `confirm_bounds` when the user rejected a selection; it now forwards
+  `confirm_bounds` and re-asks for the start height.
+
+- `save_cfnetcdf` no longer raises without metadata (the README quick
+  start); with neither metadata nor a path the name is derived from the input.
+  `save_netcdf` and `save_cfnetcdf` now resolve to distinct names
+  (`...ascent.nc` / `...cf_ascent.nc`), so calling both no longer overwrites.
+- `save_cfnetcdf` CF/WMO attributes: both references are kept; `pressure` is
+  `air_pressure` with no `positive`/`axis`; `altitude` uses the CF name
+  `altitude` and is the only Z axis; `featureType = trajectory` is backed by a
+  `trajectory_id` variable with `cf_role`; `time` is `f8` so sub-second bin
+  centres are not truncated; an unresolved `copter_id`/`tail_number` no
+  longer raises.
+- `Profile.q` is a true kg/kg quantity (it was kg/kg magnitudes labelled
+  g/kg). The writers convert explicitly and write `g/kg` instead of `gPerKg`.
+- `coefficient_revision` is the last commit that changed `MasterCoefList.csv`
+  (symlinks resolved, `unknown` if untracked, `-dirty` for uncommitted edits)
+  instead of the HEAD of whatever repository encloses the directory. A new
+  `coefficient_sha256` attribute records the table's hash.
+- Writers use `platform.node()` instead of `os.uname()` (works on Windows)
+  and no longer call the deprecated `datetime.utcnow()`/`utcfromtimestamp()`.
+- `Profile.__init__` no longer overwrites its `file_path` argument;
+  `Profile_Set` forwards `coefficient_dir`.
+- BARO `Temp`/`GndTemp` are declared and written in degC (they were declared
+  degF; ArduPilot logs degC). a0 files labelled `F` read back as degC.
+- Samples logged before the GPS clock was set are dropped at parse time (the
+  whole row) instead of carried as NaN times, which broke the a0 writer and
+  datetime comparisons.
+- Per-sensor calibrated series are slot-aligned: an absent middle sensor is an
+  all-NaN slot instead of shifting later sensors down, which mis-paired
+  thermistors with serials and misnumbered a0 `calib_temp<n>`/`calib_rh<n>`.
+- CSV reader: all six IMU channels are read, down-velocity comes from `vz`,
+  `FlightLog.data` is always defined, and the removed pandas option
+  `infer_datetime_format` is no longer passed.
+- Importing `profiles` no longer changes the host process: no global
+  RuntimeWarning suppression, no UnitStrippedWarning-as-error, no pandas
+  matplotlib converter registration, and `matplotlib.pyplot` is imported
+  lazily where plots are drawn.
+- lat/lon/alt_MSL are binned with the same (start, end] bins as every other
+  gridded variable, so they always have the same length (the old
+  `[start, end)` helper could drop the final bin).
+- `process_flights` no longer parses the first flight twice (re-reading the
+  BIN and, with `nc_level='low'`, writing the a0 file twice).
+- `Meta`: `dronelogbook` is imported only when fetching from DroneLogbook;
+  `read_file` applies every field from a flight file instead of stopping at
+  the first replaced one, and no longer raises on non-string values or a
+  missing timestamp.
+
+- ESC RPM samples logged before the GPS clock was set are dropped, as for
+  the other groups, instead of being stamped 1970.
+- `FlightLog.is_equal` no longer raises `TypeError` on pint Quantities, and
+  treats matching NaNs as equal.
 
 ### Changed
 
@@ -218,7 +401,38 @@ output as `coef_temperature_source`.
   per-variable writer did not, so that file claimed g/kg while holding
   kg/kg. Both now scale.
 
+- `Profile.save_netcdf` no longer looks up a place name over the network by
+  default; pass `lookup_place=True` to record `flight_location`. The lookup
+  has a 5 s timeout and an identifying User-Agent, and a failure warns
+  instead of aborting the save.
+- `regrid_data_group` yields one entry per bin, including empty bins.
+  `Profile.lat`/`lon`/`alt_MSL` shift by up to ~5 mm (lat) and ~0.4 m
+  (alt_MSL) from the previous binning.
+- `FlightLog._as_datetimes` raises `ValueError` on NaT instead of returning
+  NaN.
+- Docs workflow runs in `python:3.12-slim-bookworm` (was end-of-life
+  `debian:buster-slim`), with Sphinx tooling installed from pip.
+
+- A requested barometer instance or EKF core that is absent from the log
+  raises `ValueError` listing the instances present, instead of a generic
+  "no pres messages" failure. A log with only BARO `I=0` processed with the
+  default `baro_instance=1` now errors rather than silently using `I=0`.
+
 ### Added
+
+- Tests: a trimmed current-firmware fixture
+  (`test/data/flight2862_ascent_trim.BIN`, 1.8 MB: BARO `I`, XKF1 `C`, ESC
+  instances, no USER_SENSORS) with end-to-end `process_flights` coverage and
+  onboard-calibration selection; `process_flights` is characterized against
+  the flight616 p0 snapshot, so the v2 entry point is no longer held only by
+  the deprecated `Profile_Set` harness; a0 reprocessing is checked for theta,
+  T_d, mixing ratio and q. `pytest.ini` turns DeprecationWarnings attributed
+  to `profiles` or the test suite into errors (third-party ones stay ignored).
+- `ProcessingConfig.baro_instance` (default 1, provisional) and `ekf_core`
+  (default 0), also accepted by `FlightLog`, choose the BARO `I` instance and
+  XKF1 core `C` on current firmware. Logs with separate BARO/BAR2 messages
+  ignore them (BAR2 is still preferred). The instance used is recorded as
+  `baro_instance`, with `baro_message_type`, in a0 and c1 files.
 
 - `test/` is a real suite: baseline characterization snapshots, grid
   invariants, and an a0 NetCDF round trip. Hermetic — uses `test/data/coefs`,
@@ -234,17 +448,13 @@ output as `coef_temperature_source`.
   Pre-existing; `Raw_Profile` falls back to a filename derived from the input
   and does not.
 - RH per-sensor corrections are not applied at all (see `rh_calib`).
-- **Peak detection reports phantom profiles.** `identify_profile_peaks`
-  calls `find_peaks(alts, prominence=1)` - a one-metre prominence. On
-  flight616 the second "profile" it finds runs 08:07:51 to 08:07:53, two
-  seconds, over one metre of altitude (1746.8 to 1747.8 m): a wiggle at the
-  top of the real profile. With `profile_start_height` forced to 350 m the
-  grid is built from 350 to 1740 m regardless, so 119 of its 140 levels
-  fall past the end of that two-second leg and every variable is NaN there.
-  The `if len(p.gridded_times) > 3` guard in the processing scripts passes,
-  so a mostly-empty second c1 file gets written. `ProcessingConfig
-  .min_levels` is a stopgap; a real fix needs a minimum profile depth in
-  the detector, which changes which profiles get emitted.
+- **Peak detection still reports phantom legs; they are now filtered.**
+  `identify_profile_peaks` itself is unchanged (a one-metre prominence), so
+  on flight616 it still finds a 2-second, 1.1 m "profile" at 08:07:51 on top
+  of the real one. `FlightLog.find_legs` now discards legs that climb (or
+  descend) less than `ProcessingConfig.min_leg_extent` - see Fixed. Calling
+  `identify_profile_peaks` directly, or `find_legs(min_extent=0)`, still
+  returns them.
 - `_read_csv` is still the original hand-written parser. It has no test
   coverage and no sample data in the repo, so it was left alone rather than
   migrated to the schema on faith.

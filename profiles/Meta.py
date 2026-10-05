@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import dronelogbook as dlb
 
 class Meta:
     """ Processes, stores, and writes metadata files (JSON-LD for public, CSV
@@ -76,6 +75,8 @@ class Meta:
             self.get_metadata_from_dlb(guid)
 
     def get_metadata_from_dlb(self, flight_guid):
+        # Optional dependency: only the DLB path needs it.
+        import dronelogbook as dlb
         conn = dlb.DLB()
 
         flight = conn.get_flight(flight_guid, recursive=True)
@@ -126,21 +127,22 @@ class Meta:
         file = pd.read_csv(csv_path)
         for field in self.all_fields.keys():
             if field in file.keys():
-                if field is not None and self.all_fields[field] is not None \
-                        and field not in "timestamp":
-                    print("Replaced " + str(self.all_fields[field] + " with " + str(file[field].values[0])))
+                if self.all_fields[field] is not None \
+                        and field != "timestamp":
+                    print("Replaced " + str(self.all_fields[field])
+                          + " with " + str(file[field].values[0]))
                     self.all_fields[field] = np.array(file[field])[0]
-                    return
                 else:
                     self.all_fields[field] = np.array(file[field])[-1]
-            if "location" in field:
+            if field == "location":
                 try:
                     self.all_fields[field] = np.array(file["location_id"])[-1]
                 except KeyError:
                     continue
 
-        self.all_fields["date_utc"] = self.all_fields["timestamp"][0:8]
-
+        timestamp = self.all_fields["timestamp"]
+        if timestamp is not None and not pd.isna(timestamp):
+            self.all_fields["date_utc"] = str(timestamp)[0:8]
 
     def combine(self, other):
         """ Merge two Meta objects to create a file that accurately describes

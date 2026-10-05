@@ -7,10 +7,11 @@ vertical grid's starting height across every file so profiles from one
 mission share levels. Both are here, without a container class whose
 contents are the only thing anyone ever wanted.
 """
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-from profiles.Profile import Profile
+from profiles.Profile import Profile, EmptyProfileError
 from profiles.flight import FlightLog
 
 
@@ -26,16 +27,33 @@ class ProcessingConfig:
     :var confirm_bounds: plot detected legs for a visual check
     :var profile_start_height: force the grid to start here, in metres. Left
        as None, the first flight's own starting height is adopted and then
-       applied to the rest of the batch.
+       applied to the rest of the batch. Both profiles_from_flight and
+       process_flights honour it. It is a height, so on a pressure grid
+       (res_units 'hPa' or 'Pa') it is ignored with a warning and the first
+       flight's own starting pressure is adopted instead.
     :var nc_level: 'low' writes per-object NetCDF files, None or 'none'
        writes nothing
     :var legacy_peak_id: use the pre-2021 altitude-threshold leg finder
     :var tail_number: override the airframe identity, needed when the log
        does not carry a usable vehicle ID
     :var wind_algorithm: 'linear' or 'quadratic'
-    :var min_levels: discard profiles gridding to fewer levels than this.
-       Peak detection reports spurious profiles from small wiggles at the
-       top of real ones - see CHANGELOG.
+    :var min_levels: discard profiles with fewer than this many levels that
+       actually hold data. Levels the leg never reached (NaN pressure or
+       altitude) do not count, so a short leg gridded onto a long common
+       grid is dropped rather than passed for its NaN padding.
+    :var min_leg_extent: metres. Legs that climb (descend, for
+       ``ascent=False``) less than this are not treated as profiles. Peak
+       detection reports small wiggles at the top of real profiles; the
+       default of 50 m removes them (see FlightLog.find_legs). 0 disables
+       the check. Not applied to the legacy finder.
+    :var baro_instance: which barometer supplies pressure: the ``I`` field
+       of current firmware's BARO messages. Default 1, the scoop
+       barometer on OK3DM/CopterSonde airframes (confirm for others). A log
+       without that instance raises an error naming those it has. Old logs
+       with separate BARO and BAR2 messages and no instance field always
+       use BAR2, and this setting does not apply to them.
+    :var ekf_core: which EKF core supplies attitude and velocity (the ``C``
+       field of XKF1); default 0, the primary core
     :var calibration: 'auto' decides per flight from whether the log
        reports sensor serial numbers; 'table' forces Steinhart-Hart from
        logged resistance; 'onboard' takes IMET.T as logged.
@@ -51,12 +69,19 @@ class ProcessingConfig:
     tail_number: Optional[str] = None
     wind_algorithm: str = 'linear'
     min_levels: int = 0
+    min_leg_extent: float = 50.0
     calibration: str = 'auto'
+    baro_instance: int = 1
+    ekf_core: int = 0
+    #: Directory of coefficient tables for every flight's calibration
+    #: source, or None to resolve it through profiles.config.
+    coefficient_dir: Optional[str] = None
     #: Per-variable (max spread of sensor means, max spread of sensor
     #: standard deviations). None keeps Profile.DEFAULT_QC_THRESHOLDS.
     qc_thresholds: Optional[dict] = None
-    #: Name of a registered bias correction to record against the output,
-    #: or None. Applying one is still opt-in - see profiles/bias.py.
+    #: Name of a registered bias correction, or None. It is recorded in the
+    #: output as requested-but-NOT-applied: nothing applies it yet, and
+    #: whether to is a scientific decision - see profiles/bias.py.
     bias_correction: Optional[str] = None
 
 
@@ -88,32 +113,49 @@ def profiles_from_flight(path, config, metadata=None, base_start=None,
         flight = FlightLog(path, config.dev, nc_level=config.nc_level,
                            metadata=metadata,
                            tail_number=config.tail_number,
-                           calibration=config.calibration)
+                           calibration=config.calibration,
+                           coefficient_dir=config.coefficient_dir,
+                           baro_instance=config.baro_instance,
+                           ekf_core=config.ekf_core)
     elif config.calibration != 'auto':
         # The caller parsed the log themselves; the config still decides.
         from profiles import Coef_Manager
         flight.calibration_source = Coef_Manager.source_for_flight(
-            flight.serial_numbers, mode=config.calibration)
+            flight.serial_numbers, directory=config.coefficient_dir,
+            mode=config.calibration)
 
     legs = flight.find_legs(
         legacy=config.legacy_peak_id,
         confirm_bounds=config.confirm_bounds,
-        profile_start_height=config.profile_start_height)
+        profile_start_height=config.profile_start_height,
+        min_extent=config.min_leg_extent, ascent=config.ascent)
 
     profiles = []
     for number in range(1, len(legs) + 1):
-        profile = Profile(
-            path, config.resolution, config.res_units, number,
-            ascent=config.ascent, dev=config.dev,
-            confirm_bounds=config.confirm_bounds, index_list=legs,
-            raw_profile=flight,
-            profile_start_height=config.profile_start_height,
-            nc_level=config.nc_level, base_start=base_start)
+        try:
+            # Profile applies profile_start_height itself, so this entry
+            # point and process_flights grid a flight identically.
+            profile = Profile(
+                path, config.resolution, config.res_units, number,
+                ascent=config.ascent, dev=config.dev,
+                confirm_bounds=config.confirm_bounds, index_list=legs,
+                raw_profile=flight,
+                profile_start_height=config.profile_start_height,
+                nc_level=config.nc_level, base_start=base_start)
+        except EmptyProfileError as exc:
+            warnings.warn(f'{path}: skipping profile {number}: {exc}',
+                          UserWarning, stacklevel=2)
+            continue
 
         if config.qc_thresholds:
             profile.qc_thresholds.update(config.qc_thresholds)
         if config.bias_correction:
             from profiles import bias
+            warnings.warn(
+                f'bias_correction={config.bias_correction!r} is recorded in '
+                f'the output but NOT applied to the data; no bias '
+                f'correction is applied by this pipeline.', UserWarning,
+                stacklevel=2)
             profile.bias_correction = bias.get(config.bias_correction)
 
         profiles.append(profile)
@@ -137,9 +179,6 @@ def process_flights(paths, config=None, metadata=None, compute=True,
     results = []
 
     base_start = None
-    if config.profile_start_height is not None:
-        from profiles.unit_registry import units
-        base_start = config.profile_start_height * units.m
 
     for path in paths:
         meta = metadata.get(path) if isinstance(metadata, dict) else metadata
@@ -148,13 +187,18 @@ def process_flights(paths, config=None, metadata=None, compute=True,
                                             base_start=base_start)
 
             # Adopt the first flight's grid so later ones share its levels.
+            # A profile_start_height already fixed it, so there is nothing
+            # to adopt (and nothing to re-run) in that case.
             if base_start is None and profiles:
                 base_start = profiles[0]._base_start
-                profiles = profiles_from_flight(path, config, metadata=meta,
-                                                base_start=base_start)
+                if not profiles[0]._base_start_given:
+                    # The log is already parsed; only the grid changes.
+                    profiles = profiles_from_flight(
+                        path, config, metadata=meta, base_start=base_start,
+                        flight=profiles[0]._raw_profile)
 
             profiles = [p for p in profiles
-                        if len(p.gridded_centers) >= config.min_levels]
+                        if p.n_populated_levels >= config.min_levels]
 
             if compute:
                 for profile in profiles:

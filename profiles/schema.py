@@ -35,7 +35,24 @@ Field = namedtuple('Field', 'source name units')
 #:     seen so far carries both NKF1 and XKF1, so this is untested in
 #:     practice; it preserves what the hand-written parser did, which was to
 #:     merge them.
-Group = namedtuple('Group', 'name types fields select')
+#:
+#: ``instance`` (optional, an :data:`Instance`) says which copy to keep when
+#: the firmware logs one message per sensor or per estimator core.
+Group = namedtuple('Group', 'name types fields select instance',
+                   defaults=(None,))
+
+#: Pick one copy of a message that is logged once per hardware instance.
+#:
+#: ``field`` is the key in the message's data dict that numbers the copies
+#: and ``keep`` the value to retain. A message that does not carry the field
+#: at all (older firmware, which named the copies BAR2, IMU2, ... or simply
+#: logged one) is always accepted, so legacy logs are unaffected. Merging the
+#: copies instead gives a series with duplicate timestamps that alternates
+#: between two sensors' readings.
+#:
+#: The default ``keep`` can be overridden per group through
+#: ``parsing.parse(..., instances={group_name: value})``.
+Instance = namedtuple('Instance', 'field keep')
 
 
 def _numbered(source, name, units, count):
@@ -79,16 +96,29 @@ POSITION = Group(
 
 #: BAR2 wins where both are present - it is the external barometer on the
 #: CopterSonde, BARO the autopilot's internal one.
+#:
+#: Current ArduPilot logs every barometer as BARO with an instance field
+#: ``I`` and has no BAR2, so the external sensor has to be named by instance.
+#: Which one that is depends on the airframe and the order the autopilot
+#: probed its drivers; it is not recorded in the log. The default, 1, is
+#: provisional: on OK3DM flight2862 instance 1 is the cooler (33 C vs 47 C
+#: die temperature) and more variable sensor, the same signature BAR2 has
+#: against BARO in flight616, but nothing in the log proves it sits in the
+#: scoop. Confirm for each airframe and override with ``instances={'pres': n}``.
 PRESSURE = Group(
     name='pres',
     types=('BAR2', 'BARO'),
     select='preferred',
     fields=(Field('Press', 'pres', 'pascal'),
-            Field('Temp', 'temp', 'degF'),
-            Field('GndTemp', 'ground_temp', 'degF'),
-            Field('Alt', 'alt', 'meter')))
+            Field('Temp', 'temp', 'degC'),
+            Field('GndTemp', 'ground_temp', 'degC'),
+            Field('Alt', 'alt', 'meter')),
+    instance=Instance('I', 1))
 
 #: Roll, pitch and yaw are logged in degrees already; do not convert.
+#:
+#: XKF1 is logged once per EKF core, field ``C``. Core 0 is the primary; the
+#: others are redundant estimates of the same state and would interleave.
 ROTATION = Group(
     name='rotation',
     types=('NKF1', 'XKF1'),
@@ -101,7 +131,8 @@ ROTATION = Group(
             Field('Yaw', 'yaw', 'degree'),
             Field('PN', 'pos_n', 'meter'),
             Field('PE', 'pos_e', 'meter'),
-            Field('PD', 'pos_d', 'meter')))
+            Field('PD', 'pos_d', 'meter')),
+    instance=Instance('C', 0))
 
 #: The autopilot's own wind estimate plus the third column of its rotation
 #: matrix. Logged by firmware from 2021 onward; absent from older files.
@@ -124,7 +155,10 @@ INERTIAL = Group(
             Field('GyrZ', 'gyr_z', None),
             Field('AccX', 'acc_x', None),
             Field('AccY', 'acc_y', None),
-            Field('AccZ', 'acc_z', None)))
+            Field('AccZ', 'acc_z', None)),
+    # Only the first IMU. Older logs name them IMU/IMU2/IMU3 instead of
+    # carrying an instance field.
+    instance=Instance('I', 0))
 
 #: Every group parsed from a message stream, in the order they are built.
 #: PRESSURE must come after POSITION: its altitude is stored relative to the

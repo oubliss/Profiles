@@ -23,19 +23,24 @@ import os
 from .utils import event_IDs
 
 def _as_datetimes(values):
-    """ numpy datetime64 back to Python datetimes, NaT to NaN.
+    """ numpy datetime64 back to Python datetimes.
 
     Everything downstream - netCDF4.date2num, list().index() on a time
-    array, strftime - expects datetime objects, and a sample whose clock had
-    not yet been set from GPS was historically recorded as NaN rather than
-    dropped.
+    array, strftime, comparison against datetimes - expects datetime
+    objects. Samples stamped before the GPS clock was set are dropped by
+    profiles.parsing, so there is no NaT to represent; one reaching here
+    would otherwise become NaN and fail much later, in the a0 writer or a
+    time comparison.
 
     :param values: datetime64 array or sequence
     :rtype: list
+    :raises ValueError: a value is NaT
     """
     stamps = np.asarray(values, dtype='datetime64[us]')
-    return [np.nan if np.isnat(stamp) else stamp.astype(object)
-            for stamp in stamps]
+    if np.isnat(stamps).any():
+        raise ValueError('time array contains NaT; samples without a valid '
+                         'timestamp must be dropped, not carried')
+    return [stamp.astype(object) for stamp in stamps]
 
 
 def _times(dataset):
@@ -44,12 +49,100 @@ def _times(dataset):
     return _as_datetimes(dataset[dimension].values)
 
 
+def _arrays_equal(first, second):
+    """ np.array_equal that also works on pint Quantities (which do not
+    implement it): units must match and values must be equal, NaN included
+    where the same slots are NaN in both."""
+    first_unit = getattr(first, 'units', None)
+    second_unit = getattr(second, 'units', None)
+    if first_unit != second_unit:
+        return False
+    if first_unit is not None:
+        first, second = first.magnitude, second.magnitude
+    return np.array_equal(first, second, equal_nan=_is_float(first))
+
+
+def _is_float(array):
+    return np.asarray(array).dtype.kind == 'f'
+
+
 def _quantity(dataset, name):
     """A Dataset variable as a pint Quantity, using its recorded units."""
     variable = dataset[name]
     unit = variable.attrs.get('units')
     values = np.asarray(variable.values)
     return values * units.parse_expression(unit) if unit else values
+
+
+#: Time reference of every a0 time coordinate.
+_A0_EPOCH = "microseconds since 2010-01-01 00:00:00:00"
+
+
+def _nc_values(group, name):
+    """A float variable of an a0 group as a plain array, masked values NaN.
+
+    A netCDF Variable is incompatible with pint, and a masked array would
+    carry its fill value into the arithmetic.
+    """
+    return np.asarray(np.ma.filled(group.variables[name][:], np.nan))
+
+
+def _nc_times(group):
+    """The ``time`` variable of an a0 group as Python datetimes."""
+    return list(netCDF4.num2date(
+        group.variables["time"][:], units=_A0_EPOCH,
+        only_use_cftime_datetimes=False, only_use_python_datetimes=True))
+
+
+def _slot(series, number):
+    """ Sensor ``number``'s calibrated series, or None if the slot is empty.
+
+    ``series`` is slot-aligned (see calibration._sensor_series): index
+    number - 1 is sensor number, and an absent sensor is all NaN.
+    """
+    if series is None or number > len(series):
+        return None
+    values = np.asarray(series[number - 1], dtype=float)
+    return values if np.isfinite(values).any() else None
+
+
+def _read_calibrated(group, prefix):
+    """ Slot-aligned calibrated series from an a0 group, or None if none.
+
+    Sensors the writer skipped come back as NaN so that list index and
+    sensor number agree, whichever sensors were present.
+    """
+    found = [number for number in range(1, schema.N_SENSORS + 1)
+             if f'{prefix}{number}' in group.variables]
+    if not found:
+        return None
+    length = len(group.variables[f'{prefix}{found[0]}'])
+    return [_nc_values(group, f'{prefix}{number}')
+            if number in found else np.full(length, np.nan)
+            for number in range(1, schema.N_SENSORS + 1)]
+
+
+def _nc_units(variable, default):
+    """ Units recorded on an a0 variable, or ``default``.
+
+    Earlier builds wrote "F" for temperatures that were really kelvin (RH
+    sensors) or degrees Celsius (barometer, once mislabelled Fahrenheit);
+    pint reads "F" as farad, so that label, or none, falls back to what the
+    values actually are.
+    """
+    text = getattr(variable, 'units', None)
+    if not text or text == 'F':
+        text = default
+    return units.parse_expression(text)
+
+
+def _same_file(first, second):
+    """True if two paths name the same file, whether or not it exists yet."""
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return (os.path.normcase(os.path.realpath(first))
+                == os.path.normcase(os.path.realpath(second)))
 
 
 class FlightLog():
@@ -70,7 +163,8 @@ class FlightLog():
     """
 
     def __init__(self, file_path, dev=False, nc_level='low', metadata=None,
-                 tail_number=None, calibration='auto'):
+                 tail_number=None, calibration='auto', coefficient_dir=None,
+                 baro_instance=1, ekf_core=0):
         """ Creates a FlightLog and reads in data in the appropriate
         format. *If meta_path_flight or meta_path_header includes scoop_id,
         the scoop_id constructor parameter will be overwritten*
@@ -87,6 +181,17 @@ class FlightLog():
         :param str calibration: 'auto' reads the log to decide whether
            the thermistors were calibrated onboard or need the
            coefficient tables; 'table' and 'onboard' force one.
+        :param coefficient_dir: directory of coefficient tables for this
+           flight's calibration source; resolved through profiles.config
+           when omitted
+        :param int baro_instance: which barometer to use, the ``I`` field
+           of current firmware's BARO messages. 1 is the scoop barometer
+           on the OK3DM/CopterSonde airframes; confirm it for others.
+           Raises ValueError if the log has barometers but not this one.
+           Old logs with BARO/BAR2 messages and no instance field always
+           use BAR2 and ignore this setting.
+        :param int ekf_core: which EKF core to use, the ``C`` field of
+           XKF1 messages
         """
         self.meta = None
         if metadata is not None:
@@ -99,8 +204,12 @@ class FlightLog():
         self.wind = None
         self.rpm = None
         self.imu = None
+        # Parsed Datasets by group; only populated when read from a log.
+        self.data = {}
         self.dev = dev
         self.baro = "BARO"
+        self.baro_instance = None     # instance actually used, if known
+        self._instances = {'pres': baro_instance, 'rotation': ekf_core}
         self.serial_numbers = {}
         self.file_path = file_path
         self.calib_temp = None
@@ -110,6 +219,7 @@ class FlightLog():
         self.file_type = None
         self.tail_number = tail_number
         self._calibration_mode = calibration
+        self._coefficient_dir = coefficient_dir
         self._calibration_source = None
 
         # Set dummy serial numbers - these will allow the file 
@@ -162,12 +272,53 @@ class FlightLog():
         """
         if self._calibration_source is None:
             self._calibration_source = Coef_Manager.source_for_flight(
-                self.serial_numbers, mode=self._calibration_mode)
+                self.serial_numbers, directory=self._coefficient_dir,
+                mode=self._calibration_mode)
         return self._calibration_source
 
     @calibration_source.setter
     def calibration_source(self, source):
         self._calibration_source = source
+
+    @property
+    def start_time(self):
+        """ The flight's first valid timestamp, or None if it has none.
+
+        Coefficient rows can be dated (a recalibrated sensor has one row per
+        calibration), and the flight's start is the date they are selected
+        by. Taken as the earliest first timestamp across the logged streams
+        so it does not depend on which message type arrived first.
+
+        :rtype: pandas.Timestamp or None
+        """
+        starts = []
+        for stream in (self.temp, self.rh, self.pos, self.pres):
+            if stream is None or len(stream) == 0:
+                continue
+            for value in stream[-1]:
+                try:
+                    stamp = pd.Timestamp(value)
+                except (TypeError, ValueError):
+                    continue
+                if not pd.isna(stamp):
+                    starts.append(stamp)
+                    break
+        return min(starts) if starts else None
+
+    def resolve_tail_number(self):
+        """ The airframe this flight was flown with.
+
+        An explicitly given tail number wins. The registry is consulted only
+        when none was given - the log's vehicle ID is a short number that can
+        map to several aircraft, so it is the weaker evidence.
+
+        :rtype: str
+        :raises KeyError: no tail number given and the log has no copterID
+        """
+        if self.tail_number is not None:
+            return self.tail_number
+        return self.calibration_source.get_tail_n(
+            self.serial_numbers['copterID'], when=self.start_time)
 
     def apply_thermo_coeffs(self):
         """ Calibrate every temperature and humidity sensor individually.
@@ -179,7 +330,8 @@ class FlightLog():
         serial_numbers = thermo_data['serial_numbers']
 
         self.calib_temp = calibration.calibrate_temperature(
-            thermo_data, serial_numbers, source=self.calibration_source)
+            thermo_data, serial_numbers, source=self.calibration_source,
+            when=self.start_time)
         self.calib_rh = calibration.calibrate_humidity(
             thermo_data, serial_numbers)
 
@@ -191,18 +343,14 @@ class FlightLog():
         wind_data = self.wind_data()
 
         try:
-            if self.tail_number is None:
-                tail_number = utils.coef_manager.get_tail_n(
-                    wind_data['serial_numbers']['copterID'])
-            else:
-                tail_number = self.tail_number
+            tail_number = self.resolve_tail_number()
         except KeyError:
             print("No CopterID found. Please specify a tail number upon "
                   "FlightLog creation to calc winds (needed for CSV reads)")
             return
 
-        coefficients = utils.coef_manager.get_coefs('Wind', tail_number,
-                                                    equation_name)
+        coefficients = self.calibration_source.get_coefs(
+            'Wind', tail_number, equation_name, when=self.start_time)
         self.calib_dir, self.calib_speed = wind_retrieval.retrieve(
             wind_data['roll'], wind_data['pitch'], wind_data['yaw'],
             coefficients, equation_name)
@@ -231,8 +379,13 @@ class FlightLog():
         return (times[running.min()] + timedelta(seconds=settle_seconds),
                 times[running.max()])
 
+    #: Smallest climb (or descent), in metres, that find_legs reports as a
+    #: profile. See find_legs for where 20 comes from.
+    MIN_LEG_EXTENT = 50.0
+
     def find_legs(self, legacy=False, confirm_bounds=False,
-                  profile_start_height=None):
+                  profile_start_height=None, min_extent=MIN_LEG_EXTENT,
+                  ascent=True):
         """ Locate each vertical profile flown during this flight.
 
         This lived in two places - Profile_Set.add_all_profiles and
@@ -243,12 +396,25 @@ class FlightLog():
            instead of peak detection
         :param bool confirm_bounds: plot what was found for a sanity check
         :param profile_start_height: starting height for the legacy finder
+        :param float min_extent: peak detection only. Legs that do not climb
+           (descend, for ``ascent=False``) at least this many metres are not
+           reported. 0 or None disables the check. The legacy finder is not
+           filtered: its caller already chose a start height.
+        :param bool ascent: which direction ``min_extent`` is measured in -
+           True for the climb, False for the descent, None for either
         :rtype: list[tuple]
         :return: (start, peak, end) times for each profile found
 
-        NOTE: peak detection currently uses a one-metre prominence, so a
-        small altitude wiggle at the top of a real profile is reported as a
-        profile of its own. See CHANGELOG.
+        Peak detection uses a one-metre prominence, so a small altitude
+        wiggle at the top of a real profile used to be reported as a profile
+        of its own (flight616: 08:07:51-08:07:53, 1.1 m). The same flight's
+        descent also starts with a 27 m dip below that peak, which is a
+        "profile" when processing descents. The default extent of 50 m
+        clears both with margin while staying below every real profile in
+        the logs checked: flight616 and the 2026 OK3DM logs that parse have
+        profiles of 76 m to 1420 m. The only other legs found there were
+        13-17 m hover/ground-test wiggles (flights 2858 and 2861), which
+        grid to one or two 10 m levels, so nothing of value is lost.
         """
         pos = self.pos_data()
 
@@ -257,9 +423,13 @@ class FlightLog():
                 pos['alt_MSL'], pos['time'], confirm_bounds, to_return=[],
                 profile_start_height=profile_start_height)
 
-        return utils.identify_profile_peaks(
+        legs = utils.identify_profile_peaks(
             pos['alt_MSL'].magnitude, pos['time'],
             window=self.sensor_window(), confirm_bounds=confirm_bounds)
+
+        return utils.filter_legs_by_extent(
+            legs, pos['alt_MSL'].to('m').magnitude, pos['time'],
+            min_extent, ascent=ascent)
 
     def pos_data(self):
         """ Gets data needed by the Profile constructor.
@@ -364,7 +534,7 @@ class FlightLog():
         sensor_names = {}
 
         # Read in the CSV
-        data = pd.read_csv(file_path, names=csv_header, infer_datetime_format=False, dtype=data_types)
+        data = pd.read_csv(file_path, names=csv_header, dtype=data_types)
 
         # Convert to a dict for ease of not working with a pandas dataframe
         data = data.to_dict('list')
@@ -521,7 +691,7 @@ class FlightLog():
                     rotation_list[value] = data['vx']
                 elif 'VN' in key:
                     rotation_list[value] = data['vy']
-                elif 'VZ' in key:
+                elif 'VD' in key:
                     rotation_list[value] = data['vz']
                 else:
                     rotation_list[value] = data[key.lower()]
@@ -544,15 +714,16 @@ class FlightLog():
         sensor_names['IMU']['AccZ'] = 5
         sensor_names['IMU']['TimeUS'] = -1
 
-        try:
-            if 'Time' in key:
-                imu_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
+        for key, value in sensor_names['IMU'].items():
+            try:
+                if 'Time' in key:
+                    imu_list[value] = [dt.strptime(d[:-2], '%Y-%m-%dT%H:%M:%S.%f') for d in data['date']]  # Need the [:-2] because the microsecond string is 7 chars long but python can only deode 6
 
-            else:
-                imu_list[value] = data[key.lower()]
+                else:
+                    imu_list[value] = data[key.lower()]
 
-        except KeyError:
-            imu_list[value] += [np.nan for forr in range(data_len)]
+            except KeyError:
+                imu_list[value] += [np.nan for forr in range(data_len)]
 
 
         #####
@@ -588,8 +759,8 @@ class FlightLog():
 
         # PRES
         pres_list[0] = np.array(pres_list[0]) * units.Pa
-        pres_list[1] = np.array(pres_list[1]) * units.fahrenheit
-        pres_list[2] = np.array(pres_list[2]) * units.fahrenheit
+        pres_list[1] = np.array(pres_list[1]) * units.degC
+        pres_list[2] = np.array(pres_list[2]) * units.degC
         pres_list[3] = np.array(np.add(pres_list[3], ground_alt)) * units.m
 
         # ROTATION
@@ -637,7 +808,7 @@ class FlightLog():
            and Wind Profile, specify 'low'. For no NetCDF files, specify \
            'none'.
         """
-        parsed = parsing.parse(messages)
+        parsed = parsing.parse(messages, instances=self._instances)
         self.data = parsed['groups']
 
         self.serial_numbers.update(parsed['serial_numbers'])
@@ -651,6 +822,7 @@ class FlightLog():
                 + ' were found.')
 
         self.baro = self.data['pres'].attrs['source_message_type']
+        self.baro_instance = self.data['pres'].attrs.get('source_instance')
 
         self._build_legacy_tuples(parsed)
 
@@ -732,9 +904,21 @@ class FlightLog():
     def _read_netCDF(self, file_path):
         """ Reads data from a NetCDF file. Called by the constructor.
 
+        Rebuilds the same positional tuples _build_legacy_tuples produces
+        from a log, so a FlightLog read from an a0 file is interchangeable
+        with one read from the .BIN it was written from. Units come from
+        each variable's own ``units`` attribute where the writer recorded
+        them (temperatures and resistances); a0 files written by earlier
+        1.4.0-dev builds labelled temperatures in K as ``volt<n>`` / "mV"
+        and never stored resistances, and are read as temperatures in K
+        with the resistance slots left NaN.
+
+        Groups the writer makes optional (wind, events, rpm, calibrated
+        values) are optional here too.
+
         :param string file_path: file name
         """
-        
+
         main_file = netCDF4.Dataset(file_path, "r", format="NETCDF4",
                                     mmap=False)
 
@@ -742,200 +926,167 @@ class FlightLog():
         # superfluous conversion; a Variable object is incompatible with pint.
 
         # SERIAL NUMBERS
-        self.serial_numbers = {}
-        self.serial_numbers["copterID"] = main_file.groups["serial_numbers"].getncattr("copterID")
-        for i in range(4):  # Throughout the file, it is assumed that there are 4 sensors of each type
-            self.serial_numbers["rh" + str(i+1)] = main_file.groups["serial_numbers"].getncattr("rh" + str(i+1))
-            self.serial_numbers["imet" + str(i+1)] = main_file.groups["serial_numbers"].getncattr("imet" + str(i+1))
+        # Start from the dummy serials set in the constructor and overlay
+        # whatever the file recorded: copterID is absent from logs without
+        # SYSID_THISMAV, and 'wind' is carried alongside the sensor serials.
+        if "serial_numbers" in main_file.groups:
+            sn_grp = main_file.groups["serial_numbers"]
+            for name in sn_grp.ncattrs():
+                value = sn_grp.getncattr(name)
+                self.serial_numbers[name] = (value.item()
+                                             if isinstance(value, np.generic)
+                                             else value)
 
         #
         # POSITION - this should be first
         #
-        pos_list = []
-        # lat
-        pos_list.append(main_file.groups["pos"].variables["lat"])
-        pos_list[0] = np.array(pos_list[0]) * units.deg
-        # lng
-        pos_list.append(main_file["pos"].variables["lng"])
-        pos_list[1] = np.array(pos_list[1]) * units.deg
-        # alt
-        pos_list.append(main_file["pos"].variables["alt"])
-        pos_list[2] = np.array(pos_list[2]) * units.m
-        # altitude relative to home
-        pos_list.append(main_file["pos"].variables["alt_rel_home"])
-        pos_list[3] = np.array(pos_list[3]) * units.m
-        # altitude relative to origin
-        pos_list.append(main_file["pos"].variables["alt_rel_orig"])
-        pos_list[4] = np.array(pos_list[4]) * units.m
-        # time
-        pos_list.append(netCDF4.num2date(main_file["pos"].
-                                         variables["time"][:],
-                                         units="microseconds since \
-                                         2010-01-01 00:00:00:00"))
-        # convert to tuple and save
-        self.pos = tuple(pos_list)
+        pos = main_file.groups["pos"]
+        self.pos = (_nc_values(pos, "lat") * units.deg,
+                    _nc_values(pos, "lng") * units.deg,
+                    _nc_values(pos, "alt") * units.m,
+                    _nc_values(pos, "alt_rel_home") * units.m,
+                    _nc_values(pos, "alt_rel_orig") * units.m,
+                    _nc_times(pos))
 
         #
         # TEMPERATURE
         #
+        temp = main_file.groups["temp"]
+        temp_times = _nc_times(temp)
+        found = [int(name[4:]) for name in temp.variables
+                 if name[:4] in ('temp', 'volt', 'resi') and name[4:].isdigit()]
+        # Throughout the file it is assumed that there are 4 sensors of
+        # each type; a sensor that did not report is a NaN slot so the
+        # (temp, resi) pairing thermo_data() relies on is never shifted.
         temp_list = []
-        i = 1
-        while(True):
-            try:
-                temp_list.append(main_file["temp"].variables["volt" + str(i)])
-                temp_list[i-1] = np.array(temp_list[i-1]) * units.mV
-                i += 1
-            except KeyError:
-                break
-
-        temp_list.append(main_file["temp"].variables["fan_flag"][:])
-        temp_list.append(netCDF4.num2date(main_file["temp"].
-                                          variables["time"][:],
-                                          units="microseconds since \
-                                          2010-01-01 00:00:00:00"))
+        for number in range(1, max(schema.N_SENSORS, max(found, default=0)) + 1):
+            for kind, default in (('temp', 'kelvin'), ('resi', 'ohm')):
+                name = f'{kind}{number}'
+                legacy = kind == 'temp' and name not in temp.variables
+                if legacy:
+                    # Earlier 1.4.0-dev files: temperature in K under 'volt'.
+                    name = f'volt{number}'
+                if name in temp.variables:
+                    unit = (units.kelvin if legacy
+                            else _nc_units(temp.variables[name], default))
+                    temp_list.append(_nc_values(temp, name) * unit)
+                else:
+                    temp_list.append(np.full(len(temp_times), np.nan)
+                                     * units.parse_expression(default))
+        temp_list.append(_nc_values(temp, "fan_flag"))
+        temp_list.append(temp_times)
         self.temp = tuple(temp_list)
 
         #
         # RELATIVE HUMIDITY
         #
+        rh = main_file.groups["rh"]
+        rh_times = _nc_times(rh)
+        found = [int(name[2:]) for name in rh.variables
+                 if name[:2] == 'rh' and name[2:].isdigit()]
         rh_list = []
-        i = 1
-        while(True):
-            try:
-                rh_list.append(main_file["rh"].variables["rh" + str(i)])
-                rh_list[-1] = np.array(rh_list[-1]) * units.percent
-
-                rh_list.append(main_file["rh"].variables["temp" + str(i)])
-                rh_list[-1] = np.array(rh_list[-1]) * units.F
-
-                i += 1
-            except KeyError:
-                break
-        rh_list.append(netCDF4.num2date(main_file["rh"].
-                                        variables["time"][:],
-                                        units="microseconds since \
-                                        2010-01-01 00:00:00:00"))
+        for number in range(1, max(schema.N_SENSORS, max(found, default=0)) + 1):
+            if f'rh{number}' in rh.variables:
+                rh_list.append(_nc_values(rh, f'rh{number}') * units.percent)
+                # Earlier builds labelled this "F" (farad to pint) though
+                # the values are kelvin.
+                rh_list.append(_nc_values(rh, f'temp{number}') * _nc_units(
+                    rh.variables[f'temp{number}'], 'kelvin'))
+            else:
+                rh_list.append(np.full(len(rh_times), np.nan) * units.percent)
+                rh_list.append(np.full(len(rh_times), np.nan) * units.kelvin)
+        rh_list.append(rh_times)
         self.rh = tuple(rh_list)
 
         #
         # PRESSURE
         #
-        pres_list = []
-        # pres
-        pres_list.append(main_file["pres"].variables["pres"])
-        pres_list[0] = np.array(pres_list[0]) * units.Pa
-        # temp
-        pres_list.append(main_file["pres"].variables["temp"])
-        pres_list[1] = np.array(pres_list[1]) * units.F
-        # temp_gnd
-        pres_list.append(main_file["pres"].variables["temp_ground"])
-        pres_list[2] = np.array(pres_list[2]) * units.F
-        # alt
-        pres_list.append(main_file["pres"].variables["alt"])
-        pres_list[3] = np.array(pres_list[3]) * units.m
-        # time
-        pres_list.append(netCDF4.num2date(main_file["pres"].
-                                          variables["time"][:],
-                                          units="microseconds since \
-                                          2010-01-01 00:00:00:00"))
-        self.pres = tuple(pres_list)
+        pres = main_file.groups["pres"]
+        self.pres = (_nc_values(pres, "pres") * units.Pa,
+                     _nc_values(pres, "temp")
+                     * _nc_units(pres.variables["temp"], 'degC'),
+                     _nc_values(pres, "temp_ground")
+                     * _nc_units(pres.variables["temp_ground"], 'degC'),
+                     _nc_values(pres, "alt") * units.m,
+                     _nc_times(pres))
 
         #
         # ROTATION
         #
-        rot_list = []
-        # VE
-        rot_list.append(main_file["rotation"].variables["VE"])
-        rot_list[0] = np.array(rot_list[0]) * units.m / units.s
-        # VN
-        rot_list.append(main_file["rotation"].variables["VN"])
-        rot_list[1] = np.array(rot_list[1]) * units.m / units.s
-        # VD
-        rot_list.append(main_file["rotation"].variables["VD"])
-        rot_list[2] = np.array(rot_list[2]) * units.m / units.s
-        # roll
-        rot_list.append(main_file["rotation"].variables["roll"])
-        rot_list[3] = np.array(rot_list[3]) * units.deg
-        # pitch
-        rot_list.append(main_file["rotation"].variables["pitch"])
-        rot_list[4] = np.array(rot_list[4]) * units.deg
-        # yaw
-        rot_list.append(main_file["rotation"].variables["yaw"])
-        rot_list[5] = np.array(rot_list[5]) * units.deg
-        # Estimated distance from origin (N component)
-        rot_list.append(main_file["rotation"].variables["PN"])
-        rot_list[6] = np.array(rot_list[6]) * units.m
-        # Estimated distance from origin (E component)
-        rot_list.append(main_file["rotation"].variables["PE"])
-        rot_list[7] = np.array(rot_list[7]) * units.m
-        # Estimated distance from origin (Down component)
-        rot_list.append(main_file["rotation"].variables["PD"])
-        rot_list[8] = np.array(rot_list[8]) * units.m
-        # time
-        rot_list.append(netCDF4.num2date(main_file["rotation"].
-                                         variables["time"][:],
-                                         units="microseconds since \
-                                         2010-01-01 00:00:00:00"))
-        self.rotation = tuple(rot_list)
+        rotation = main_file.groups["rotation"]
+        self.rotation = tuple(
+            [_nc_values(rotation, name) * unit for name, unit in (
+                ("VE", units.m / units.s), ("VN", units.m / units.s),
+                ("VD", units.m / units.s), ("roll", units.deg),
+                ("pitch", units.deg), ("yaw", units.deg),
+                # Estimated distance from origin (N, E, Down components)
+                ("PN", units.m), ("PE", units.m), ("PD", units.m))]
+            + [_nc_times(rotation)])
 
         #
-        # WIND
+        # WIND - absent from logs that carried no WIND messages. Like the
+        # tuple built from a log, it carries no units.
         #
-        wind_list = []
-        # Wdir
-        wind_list.append(main_file['wind'].variables['wdir'])
-        wind_list[0] = np.array(wind_list[0]) * units.deg
-        # Wspeed
-        wind_list.append(main_file['wind'].variables['wspd'])
-        wind_list[1] = np.array(wind_list[1]) * units.m / units.s
-        # R13
-        wind_list.append(main_file['wind'].variables['R13'])
-        # wind_list[0] = np.array(wind_list[0]) * units.deg
-        # R23
-        wind_list.append(main_file['wind'].variables['R23'])
-        # wind_list[0] = np.array(wind_list[0]) * units.deg
-        # R33
-        wind_list.append(main_file['wind'].variables['R33'])
-        # wind_list[0] = np.array(wind_list[0]) * units.deg
-        wind_list.append(netCDF4.num2date(main_file["wind"].variables["time"][:],
-                                          units="microseconds since 2010-01-01 00:00:00:00"))
+        if "wind" in main_file.groups:
+            wind = main_file.groups["wind"]
+            self.wind = tuple(
+                [_nc_values(wind, name) for name in
+                 ("wdir", "wspd", "R13", "R23", "R33")]
+                + [_nc_times(wind)])
+        else:
+            self.wind = None
 
-        self.wind = tuple(wind_list)
+        #
+        # RPM - absent from logs with no motor messages
+        #
+        if "rpm" in main_file.groups:
+            rpm = main_file.groups["rpm"]
+            motors = []
+            while f'rpm{len(motors) + 1}' in rpm.variables:
+                motors.append(_nc_values(rpm, f'rpm{len(motors) + 1}'))
+            self.rpm = tuple(motors + [_nc_times(rpm)])
+
+        #
+        # Calibrated values, where the writer had them
+        #
+        self.calib_temp = _read_calibrated(temp, 'calib_temp')
+        self.calib_rh = _read_calibrated(rh, 'calib_rh')
+
+        if "calib_wind" in main_file.groups:
+            calib_wind = main_file.groups["calib_wind"]
+            self.calib_speed = (_nc_values(calib_wind, "calib_wspd")
+                                * units.m / units.s)
+            self.calib_dir = _nc_values(calib_wind, "calib_wdir") * units.deg
 
         #
         # Other Attributes
         #
-        self.baro = main_file.baro
-        self.dev = "True" in main_file.dev  # if main_file.dev contains the
-        # string "True", then this is a developmental flight.
+        self.baro = getattr(main_file, "baro", self.baro)
+        instance = getattr(main_file, "baro_instance", None)
+        self.baro_instance = None if instance is None else int(instance)
+        # if main_file.dev contains the string "True", then this is a
+        # developmental flight.
+        self.dev = "True" in getattr(main_file, "dev", "")
 
         #
-        # Get the Events
+        # Events - absent from logs before August 2021
         #
-
-        event_list = []
-
-        event_list.append(main_file['events']['events'][:])
-        event_list.append(netCDF4.num2date(main_file["events"].
-                                         variables["time"][:],
-                                         units="microseconds since \
-                                         2010-01-01 00:00:00:00"))
-
-        self.events = event_list
+        if "events" in main_file.groups:
+            events = main_file.groups["events"]
+            self.events = (_nc_values(events, "events"), _nc_times(events))
+        else:
+            self.events = None
 
         #
-        # Get the Messages
+        # Messages
         #
-
-        messages_list = []
-
-        messages_list.append(main_file['messages']['messages'][:])
-        messages_list.append(netCDF4.num2date(main_file["messages"].
-                                           variables["time"][:],
-                                           units="microseconds since \
-                                                 2010-01-01 00:00:00:00"))
-
-        self.messages = messages_list
+        if "messages" in main_file.groups:
+            messages = main_file.groups["messages"]
+            texts = messages.variables["messages"][:]
+            self.messages = ([str(text) for text in texts],
+                             _nc_times(messages))
+        else:
+            self.messages = ([], [])
 
         main_file.close()
 
@@ -943,17 +1094,29 @@ class FlightLog():
         """ Save a NetCDF file to facilitate future processing if a .JSON was
         read.
 
+        Temperatures are written as ``temp<n>`` and resistances as
+        ``resi<n>`` with the units the quantity actually carries, so
+        _read_netCDF can rebuild the same (temp, resi, ...) tuple. They used
+        to be written as ``volt<n>`` labelled "mV", which read back about
+        100 K high once treated as millivolts and left no resistances for
+        the pairs thermo_data() expects.
+
         :param string file_path: file name
+        :raises ValueError: if the output path would be the input log
         """
 
+        # Not .replace(): 'FLIGHT.JSON' or 'x.Bin' matched none of the
+        # patterns and the "output" was the input, which was then truncated.
         file_name = naming.resolve(
             file_path, self.meta, 'a0',
             self.meta.get("timestamp").replace("_", ".") if self.meta else '',
             resolution=None,
-            fallback=self.file_path.replace('.json', '.nc')
-                                   .replace('.bin', '.nc')
-                                   .replace('.BIN', '.nc'))
+            fallback=os.path.splitext(self.file_path)[0] + '.nc')
 
+        if _same_file(file_name, self.file_path):
+            raise ValueError(
+                f'refusing to write the a0 file over its own input '
+                f'{self.file_path!r}; pass a different output path')
 
         main_file = netCDF4.Dataset(file_name, "w",
                                     format="NETCDF4", mmap=False)
@@ -962,21 +1125,20 @@ class FlightLog():
         main_file.setncattr("Conventions", "NC-1.8")
 
         # SERIAL NUMBERS
+        # Whatever the log provided: copterID needs SYSID_THISMAV, which
+        # not every log carries, and the wind serial sits beside the sensors.
         sn_grp = main_file.createGroup("/serial_numbers")
-        sn_grp.setncattr("copterID", self.serial_numbers["copterID"])
-        for i in range(4):  # Throughout the file, it is assumed that there are 4 sensors of each type
-            sn_grp.setncattr("rh" + str(i+1), self.serial_numbers['rh' + str(i+1)])
-            sn_grp.setncattr("imet" + str(i+1), self.serial_numbers['imet' + str(i+1)])
+        for name, value in self.serial_numbers.items():
+            if value is not None:
+                sn_grp.setncattr(name, value)
 
         # EVENTS
         if self.events is not None:  # This maintains compatability for files pre August 2021
             events_grp = main_file.createGroup("/events")
             events_grp.createDimension("event_time", None)
             new_var = events_grp.createVariable("time", "f8", ("event_time",))
-            new_var[:] = netCDF4.date2num(self.events[-1],
-                                          units="microseconds since \
-                                          2010-01-01 00:00:00:00")
-            new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+            new_var[:] = netCDF4.date2num(self.events[-1], units=_A0_EPOCH)
+            new_var.units = _A0_EPOCH
 
             new_var = events_grp.createVariable("events", "f8", ("event_time",))
             new_var[:] = self.events[0]
@@ -987,34 +1149,32 @@ class FlightLog():
         message_grp = main_file.createGroup("/messages")
         message_grp.createDimension("message_time", None)
         new_var = message_grp.createVariable("time", "f8", ("message_time",))
-        new_var[:] = netCDF4.date2num(self.messages[-1],
-                                      units="microseconds since \
-                                              2010-01-01 00:00:00:00")
-        new_var.units = "microseconds since 2010-01-01 00:00:00:00"
-
-        new_var = message_grp.createVariable("messages", '<U13', ("message_time",))
-        new_var[:] = np.array(self.messages[0])
-        new_var.units = 'string'
+        new_var.units = _A0_EPOCH
+        # Variable-length strings: a fixed '<U13' silently cut longer text.
+        text_var = message_grp.createVariable("messages", str, ("message_time",))
+        text_var.units = 'string'
+        if len(self.messages[0]):
+            new_var[:] = netCDF4.date2num(self.messages[-1], units=_A0_EPOCH)
+            text_var[:] = np.array([str(text) for text in self.messages[0]],
+                                   dtype=object)
 
         # TEMP
         temp_grp = main_file.createGroup("/temp")
         temp_grp.createDimension("temp_time", None)
-        # temp_grp.base_time = date2num(self.temp[-1][0])
         temp_sensor_numbers = np.add(range(int((len(self.temp)-1)/2)), 1)
         for num in temp_sensor_numbers:
-            new_var = temp_grp.createVariable("volt" + str(num), "f8",
-                                              ("temp_time",))
-            try:
-                new_var[:] = self.temp[2*num-2].magnitude
-            except AttributeError:
-                # This sensor didn't report
-                continue
-            new_var.units = "mV"
+            for kind, slot in (("temp", 2*num-2), ("resi", 2*num-1)):
+                values = self.temp[slot]
+                if not hasattr(values, 'magnitude'):
+                    # This sensor didn't report
+                    continue
+                new_var = temp_grp.createVariable(f"{kind}{num}", "f8",
+                                                  ("temp_time",))
+                new_var[:] = values.magnitude
+                new_var.units = str(values.units)
         new_var = temp_grp.createVariable("time", "f8", ("temp_time",))
-        new_var[:] = netCDF4.date2num(self.temp[-1],
-                                      units="microseconds since \
-                                      2010-01-01 00:00:00:00")
-        new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+        new_var[:] = netCDF4.date2num(self.temp[-1], units=_A0_EPOCH)
+        new_var.units = _A0_EPOCH
 
         # Scoop fan flag
         new_var = temp_grp.createVariable("fan_flag", "f8", ("temp_time",))
@@ -1025,14 +1185,13 @@ class FlightLog():
 
         if self.calib_temp is not None:
             for num in temp_sensor_numbers:
-                new_var = temp_grp.createVariable("calib_temp" + str(num), "f8",
-                                                  ("temp_time",))
-                try:
-                    new_var[:] = self.calib_temp[num-1]
-                except Exception:
+                values = _slot(self.calib_temp, num)
+                if values is None:
                     # This sensor didn't report
                     continue
-
+                new_var = temp_grp.createVariable("calib_temp" + str(num), "f8",
+                                                  ("temp_time",))
+                new_var[:] = values
                 new_var.units = 'K'
 
         # RH
@@ -1040,6 +1199,10 @@ class FlightLog():
         rh_grp.createDimension("rh_time", None)
         rh_sensor_numbers = np.add(range(int((len(self.rh)-1)/2)), 1)
         for num in rh_sensor_numbers:
+            if not (hasattr(self.rh[2*num-2], 'magnitude')
+                    and hasattr(self.rh[2*num-1], 'magnitude')):
+                # This sensor didn't report
+                continue
             new_rh = rh_grp.createVariable("rh" + str(num),
                                            "f8", ("rh_time", ))
             new_temp = rh_grp.createVariable("temp" + str(num),
@@ -1047,23 +1210,21 @@ class FlightLog():
             new_rh[:] = self.rh[2*num-2].magnitude
             new_temp[:] = self.rh[2*num-1].magnitude
             new_rh.units = "%"
-            new_temp.units = "F"
+            # Was "F", which pint reads as farad; these are kelvin.
+            new_temp.units = str(self.rh[2*num-1].units)
         new_var = rh_grp.createVariable("time", "i8", ("rh_time",))
-        new_var[:] = netCDF4.date2num(self.rh[-1],
-                                      units="microseconds since \
-                                      2010-01-01 00:00:00:00")
-        new_var.units = "microseconds since 2010-01-01 00:00:00:00"
+        new_var[:] = netCDF4.date2num(self.rh[-1], units=_A0_EPOCH)
+        new_var.units = _A0_EPOCH
 
         if self.calib_rh is not None:
             for num in rh_sensor_numbers:
-                new_var = rh_grp.createVariable("calib_rh" + str(num), "f8",
-                                                  ("rh_time",))
-                try:
-                    new_var[:] = self.calib_rh[num-1]
-                except Exception:
+                values = _slot(self.calib_rh, num)
+                if values is None:
                     # This sensor didn't report
                     continue
-
+                new_var = rh_grp.createVariable("calib_rh" + str(num), "f8",
+                                                ("rh_time",))
+                new_var[:] = values
                 new_var.units = '%'
 
         # POS
@@ -1083,15 +1244,14 @@ class FlightLog():
         alt[:] = self.pos[2].magnitude
         alt_rel_home[:] = self.pos[3].magnitude
         alt_rel_orig[:] = self.pos[4].magnitude
-        time[:] = netCDF4.date2num(self.pos[-1], units="microseconds since \
-                                   2010-01-01 00:00:00:00")
+        time[:] = netCDF4.date2num(self.pos[-1], units=_A0_EPOCH)
 
         lat.units = "deg"
         lng.units = "deg"
         alt.units = "m MSL"
         alt_rel_home.units = "m"
         alt_rel_orig.units = "m"
-        time.units = "microseconds since 2010-01-01 00:00:00:00"
+        time.units = _A0_EPOCH
 
         # PRES
         pres_grp = main_file.createGroup("/pres")
@@ -1107,14 +1267,14 @@ class FlightLog():
         temp[:] = self.pres[1].magnitude
         temp_gnd[:] = self.pres[2].magnitude
         alt[:] = self.pres[3].magnitude
-        time[:] = netCDF4.date2num(self.pres[-1], units="microseconds since \
-                                   2010-01-01 00:00:00:00")
+        time[:] = netCDF4.date2num(self.pres[-1], units=_A0_EPOCH)
 
         pres.units = "Pa"
-        temp.units = "F"
-        temp_gnd.units = "F"
+        # Was "F", which pint reads as farad. BARO.Temp is degrees Celsius.
+        temp.units = str(self.pres[1].units)
+        temp_gnd.units = str(self.pres[2].units)
         alt.units = "m (MSL)"
-        time.units = "microseconds since 2010-01-01 00:00:00:00"
+        time.units = _A0_EPOCH
 
         # ROTATION
         rot_grp = main_file.createGroup("/rotation")
@@ -1139,8 +1299,7 @@ class FlightLog():
         pn[:] = self.rotation[6].magnitude
         pe[:] = self.rotation[7].magnitude
         pd[:] = self.rotation[8].magnitude
-        time[:] = netCDF4.date2num(self.rotation[-1], units="microseconds \
-                                   since 2010-01-01 00:00:00:00")
+        time[:] = netCDF4.date2num(self.rotation[-1], units=_A0_EPOCH)
 
         ve.units = "m/s"
         vn.units = "m/s"
@@ -1151,7 +1310,7 @@ class FlightLog():
         pn.units = 'meters'
         pe.units = 'meters'
         pd.units = 'meters'
-        time.units = "microseconds since 2010-01-01 00:00:00:00"
+        time.units = _A0_EPOCH
 
         # WIND
         if self.wind is not None:
@@ -1165,14 +1324,14 @@ class FlightLog():
             r23_var  = wind_grp.createVariable("R23", 'f8', ('wind_time',))
             r33_var  = wind_grp.createVariable("R33", 'f8', ('wind_time',))
 
-            time_var[:] = netCDF4.date2num(self.wind[-1], units="microseconds since 2010-01-01 00:00:00:00")
+            time_var[:] = netCDF4.date2num(self.wind[-1], units=_A0_EPOCH)
             wdir_var[:] = self.wind[0]
             wspd_var[:] = self.wind[1]
             r13_var[:] = self.wind[2]
             r23_var[:] = self.wind[3]
             r33_var[:] = self.wind[4]
 
-            time_var.units = "microseconds since 2010-01-01 00:00:00:00"
+            time_var.units = _A0_EPOCH
             wdir_var.units = "degrees"
             wspd_var.units = "m/s"
             r13_var.units = "None"
@@ -1187,12 +1346,11 @@ class FlightLog():
             calib_wspd_var = wind_grp.createVariable("calib_wspd", 'f8', ('wind_time',))
             calib_wdir_var = wind_grp.createVariable("calib_wdir", 'f8', ('wind_time',))
 
-            time[:] = netCDF4.date2num(self.rotation[-1], units="microseconds \
-                                               since 2010-01-01 00:00:00:00")
+            time[:] = netCDF4.date2num(self.rotation[-1], units=_A0_EPOCH)
             calib_wspd_var[:] = self.calib_speed.magnitude
             calib_wdir_var[:] = self.calib_dir.magnitude
 
-            time.units = "microseconds since 2010-01-01 00:00:00:00"
+            time.units = _A0_EPOCH
             calib_wspd_var.units = 'm/s'
             calib_wspd_var.comment = "NOTE: These values are only valid for ascending portions of the profile"
             calib_wdir_var.units = 'degrees'
@@ -1203,8 +1361,8 @@ class FlightLog():
             rpm_grp.createDimension('rpm_time', None)
 
             time_var = rpm_grp.createVariable("time", 'f8', ('rpm_time',))
-            time_var[:] = netCDF4.date2num(self.rpm[-1], units="microseconds since 2010-01-01 00:00:00:00")
-            time_var.units = "microseconds since 2010-01-01 00:00:00:00"
+            time_var[:] = netCDF4.date2num(self.rpm[-1], units=_A0_EPOCH)
+            time_var.units = _A0_EPOCH
 
             for motor_num in range(len(self.rpm) - 1):
                 rpm_var = rpm_grp.createVariable(f"rpm{motor_num+1}", 'f8', ('rpm_time',))
@@ -1214,6 +1372,8 @@ class FlightLog():
 
         # Assign global attributes and close the file
         main_file.baro = self.baro
+        if self.baro_instance is not None:
+            main_file.baro_instance = int(self.baro_instance)
         main_file.dev = str(self.dev)
 
         main_file.close()
@@ -1225,31 +1385,31 @@ class FlightLog():
         """
         # temps
         for i in range(len(self.temp)):
-            if not np.array_equal(self.temp[i], other.temp[i]):
+            if not _arrays_equal(self.temp[i], other.temp[i]):
                 print("temp not equal at " + str(i))
                 return False
 
         # rhs
         for i in range(len(self.rh)):
-            if not np.array_equal(self.rh[i], other.rh[i]):
+            if not _arrays_equal(self.rh[i], other.rh[i]):
                 print("rh not equal at " + str(i))
                 return False
 
         # pos
         for i in range(len(self.pos)):
-            if not np.array_equal(self.pos[i], other.pos[i]):
+            if not _arrays_equal(self.pos[i], other.pos[i]):
                 print("pos not equal at " + str(i))
                 return False
 
         # rotations
         for i in range(len(self.rotation)):
-            if not np.array_equal(self.rotation[i], other.rotation[i]):
+            if not _arrays_equal(self.rotation[i], other.rotation[i]):
                 print("rotation not equal at " + str(i))
                 return False
 
         # pres
         for i in range(len(self.pres)):
-            if not np.array_equal(self.pres[i], other.pres[i]):
+            if not _arrays_equal(self.pres[i], other.pres[i]):
                 print("pres not equal at " + str(i))
                 return False
 

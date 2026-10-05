@@ -10,6 +10,8 @@ averages, and both were written into the same unlimited NetCDF dimension.
 The second test pins the coordinate convention itself - bin centres, not bin
 edges - which was a systematic -resolution/2 bias.
 """
+import warnings
+
 import numpy as np
 import pytest
 
@@ -25,11 +27,15 @@ WIND_VARS = ('alt', 'pres', 'speed', 'dir', 'u', 'v')
 @pytest.fixture(scope='module')
 def processed(tmp_path_factory):
     bin_path = staged_bin(tmp_path_factory.mktemp('grid'))
-    profile_set = Profile_Set.Profile_Set(
-        resolution=RESOLUTION, res_units=RES_UNITS, ascent=True, dev=True,
-        confirm_bounds=False, nc_level=None,
-        profile_start_height=PROFILE_START_HEIGHT)
-    profile_set.add_all_profiles(str(bin_path))
+    # Profile_Set is deprecated; the grid it builds is the Profile's own and
+    # is what is checked here, so the warning is expected, not interesting.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', DeprecationWarning)
+        profile_set = Profile_Set.Profile_Set(
+            resolution=RESOLUTION, res_units=RES_UNITS, ascent=True,
+            dev=True, confirm_bounds=False, nc_level=None,
+            profile_start_height=PROFILE_START_HEIGHT)
+        profile_set.add_all_profiles(str(bin_path))
     # Thermo and wind now live on the Profile itself; the triple is kept
     # so the per-group assertions below still read clearly.
     return [(p, p.compute_thermo(), p.compute_wind())

@@ -33,7 +33,8 @@ class Profile_Set():
 
     def __init__(self, resolution=10, res_units='m', ascent=True,
                  dev=False, confirm_bounds=True, profile_start_height=None,
-                 nc_level=None, legacy_peak_id=False, tail_number=None):
+                 nc_level=None, legacy_peak_id=False, tail_number=None,
+                 coefficient_dir=None):
         """ Creates a Profiles object.
 
         :param int resolution: resolution to which data should be
@@ -57,6 +58,9 @@ class Profile_Set():
            and Wind Profile, specify 'low'. For no NetCDF files, specify \
            'none'. To generate a single, Profile_Set-level file, call \
            Profile_Set.save_netCDF where you are done adding data.
+        :param str tail_number: tail number to record, if known
+        :param str coefficient_dir: directory of coefficient tables; \
+           defaults to the process-wide configuration
         """
         self.resolution = resolution
         self.res_units = res_units
@@ -66,6 +70,7 @@ class Profile_Set():
         self.profiles = []
         self.legacy_peaks = legacy_peak_id
         self.tail_number = tail_number
+        self.coefficient_dir = coefficient_dir
 
         if profile_start_height is not None:
             self.profile_start_height = profile_start_height * units.m
@@ -104,7 +109,8 @@ class Profile_Set():
                                   if self.profile_start_height is not None
                                   else None),
             nc_level=self._nc_level, legacy_peak_id=self.legacy_peaks,
-            tail_number=self.tail_number)
+            tail_number=self.tail_number,
+            coefficient_dir=self.coefficient_dir)
 
         profiles = processing.profiles_from_flight(
             file_path, config, metadata=metadata, base_start=self._base_start)

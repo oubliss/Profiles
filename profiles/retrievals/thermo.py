@@ -5,7 +5,6 @@ Thin wrappers over MetPy, gathered here so that the derivation is one
 testable function rather than a block in the middle of a constructor.
 """
 from metpy import calc
-from profiles.unit_registry import units
 
 
 def derive(pressure, temperature, relative_humidity):
@@ -25,13 +24,11 @@ def derive(pressure, temperature, relative_humidity):
         'theta': calc.potential_temperature(pressure, temperature),
         'T_d': calc.dewpoint_from_relative_humidity(temperature,
                                                     relative_humidity),
-        # NOTE: MetPy returns kg/kg and this attaches the g/kg label
-        # without rescaling, so the magnitude is kg/kg (~0.016) while the
-        # units read gPerKg. Profile.save_netcdf compensates with an
-        # explicit * 1e3; Thermo_Profile._save_netCDF does not, so the
-        # thermo_* intermediate is mislabelled by a factor of 1000.
-        # Preserved here rather than silently corrected - deciding whether
-        # to rescale the value or fix the label is Stage 5's writer work.
+        # MetPy returns a dimensionless fraction (kg/kg). It is kept in
+        # those units, so q.to('g/kg') is the right conversion for display
+        # and the writers do it explicitly. This used to attach the gPerKg
+        # label without rescaling, which left the magnitude 1000x too small
+        # for its units.
         'q': calc.specific_humidity_from_mixing_ratio(mixing_ratio)
-             * units.gPerKg,
+             .to('kg/kg'),
     }

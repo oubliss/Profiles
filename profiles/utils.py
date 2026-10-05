@@ -6,11 +6,7 @@ import os
 import warnings
 import requests
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from datetime import timedelta
-from pandas.plotting import register_matplotlib_converters
-from pint import UnitStrippedWarning
 from metpy.units import units as u
 from scipy.signal import find_peaks
 
@@ -27,6 +23,11 @@ _coef_manager = None
 def get_coef_manager():
     """ Return the shared Coef_Manager, constructing it on first use.
 
+    Deprecated. Processing no longer goes through this: every lookup is made
+    on the flight's own calibration source (FlightLog.calibration_source),
+    so the coefficients applied follow the flight rather than process-global
+    state. It remains for scripts that reach for it directly.
+
     Construction reads the coefficient tables off disk, so it is deferred
     until something actually needs coefficients. Importing this package must
     not require ~/.wxuas to exist, and callers (notably the test suite) must
@@ -36,6 +37,10 @@ def get_coef_manager():
     :rtype: profiles.Coef_Manager.Coef_Manager
     :return: the process-wide Coef_Manager
     """
+    warnings.warn(
+        'utils.get_coef_manager()/utils.coef_manager are deprecated; use '
+        'the flight\'s calibration_source, or TableCalibration(directory).',
+        DeprecationWarning, stacklevel=2)
     global _coef_manager
     if _coef_manager is None:
         _coef_manager = Coef_Manager()
@@ -62,10 +67,6 @@ def __getattr__(name):
     if name == "coef_manager":
         return get_coef_manager()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-warnings.filterwarnings("error", category=UnitStrippedWarning)
-register_matplotlib_converters()
 
 event_IDs = """
 // DATA - event logging
@@ -155,9 +156,113 @@ def writes_netcdf(nc_level):
     return normalised == 'low'
 
 
+def nearest_index(times, target):
+    """ Index of the sample in ``times`` closest in time to ``target``.
+
+    Leg times come off the GPS clock but the barometer, thermistors and
+    humidity sensors each keep their own, so an exact ``list.index`` lookup
+    only ever worked for the clock the leg was found on.
+
+    :param sequence<datetime> times: sample times, non-decreasing
+    :param datetime target: the time to find
+    :rtype: int
+    """
+    stamps = np.asarray(times, dtype='datetime64[us]')
+    want = np.datetime64(target, 'us')
+    after = int(np.searchsorted(stamps, want, side='left'))
+    if after == 0:
+        return 0
+    if after >= len(stamps):
+        return len(stamps) - 1
+    # side='left' lands on the first sample at or after the target, so an
+    # exact match is returned as such (the old .index() behaviour).
+    if want - stamps[after - 1] < stamps[after] - want:
+        return after - 1
+    return after
+
+
+def leg_extents(legs, alts, alt_times):
+    """ Vertical extent of each leg in each direction.
+
+    :param list<tuple> legs: (start, peak, end) times
+    :param np.Array<float> alts: altitudes in metres
+    :param np.Array<Datetime> alt_times: times corresponding to alts
+    :rtype: list<tuple>
+    :return: (rise, fall) per leg, metres: peak minus start, peak minus end
+    """
+    alts = np.asarray(alts, dtype=float)
+    out = []
+    for start, peak, end in legs:
+        top = alts[nearest_index(alt_times, peak)]
+        out.append((top - alts[nearest_index(alt_times, start)],
+                    top - alts[nearest_index(alt_times, end)]))
+    return out
+
+
+def filter_legs_by_extent(legs, alts, alt_times, min_extent, ascent=True):
+    """ Drop legs that do not climb (or descend) at least ``min_extent``.
+
+    Peak detection with a one-metre prominence reports every wiggle at the
+    top of a real profile as a profile of its own. Because the legs are
+    valley-peak-valley triples, the wiggle is a *rise* of about a metre but
+    its "end" is the bottom of the real descent, so it is a perfectly good
+    descent. The extent therefore has to be measured in the direction being
+    processed.
+
+    :param float min_extent: metres; 0 or None keeps everything
+    :param bool ascent: measure the rise (start to peak) if True, the fall
+       (peak to end) if False, or either if None
+    :rtype: list<tuple>
+    """
+    if not min_extent or not legs:
+        return list(legs)
+
+    kept = []
+    for leg, (rise, fall) in zip(legs, leg_extents(legs, alts, alt_times)):
+        if ascent is None:
+            extent = max(rise, fall)
+        else:
+            extent = rise if ascent else fall
+        if extent >= min_extent:
+            kept.append(leg)
+    return kept
+
+
+def _times_at_levels(values, times, first, last, levels):
+    """ Time at which a series first reaches each level, walking forward.
+
+    The walk always advances one sample past each hit, so successive levels
+    get distinct samples even where the series is flat or noisy.
+    """
+    found = []
+    i = first
+    for elem in levels:
+        # Bound check first: i can be advanced past last by the increment
+        # below, and `and` does not short-circuit a subscript written on
+        # its left, so the original order raised IndexError when a profile
+        # ran to the last sample in the file.
+        while i < last and values[i] < elem:
+            i += 1
+        # i can only run past the end of a leg that is shorter than the
+        # grid asked of it (a common base_start on a short leg); those
+        # levels get the last sample, which leaves their bins empty.
+        found.append(times[min(i, len(times) - 1)])
+        i += 1
+    return found
+
+
 def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
                 units=None, indices=(None, None), base_start=None):
     """ Calculates times at which data means should be calculated.
+
+    The vertical coordinate is altitude, or negative pressure so that it
+    still increases with height. For an ascent everything comes back in
+    ascending order. For a descent everything comes back in *flight order*:
+    the first level is the top and altitude decreases, so that the edge times
+    still increase along the leg and the (start, end] time bins used by
+    :func:`regrid_data` keep working. Levels sit on the same
+    ``base_start + n*res`` lattice either way, so an ascent and a descent can
+    share a grid.
 
     :param np.Array<Quantity> base: Measurements of the variable serving as \
        the vertical coordinate
@@ -168,80 +273,96 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
     :param bool ascent: True if data from ascending leg of profile is to be \
        analyzed, false if descending
     :param pint.UnitRegistry units: The unit registry defined in Profile
-    :param tuple indices: start and end times
-    :param Quantity base_start: lowest altitude value of gridded_base
+    :param tuple indices: (start, end) times of the leg being gridded - \
+       (start, peak) for an ascent, (peak, end) for a descent. They are \
+       matched to the nearest sample on base's own clock, which need not be \
+       the clock they were detected on. A (start, peak, end) triple is also \
+       accepted and the leg picked by ``ascent``.
+    :param Quantity base_start: the lowest edge of the grid, in the units of \
+       base. For a pressure grid this is the highest pressure.
     :rtype: tuple(np.Array<Datetime>, np.Array<Quantity>)
     :return: times at which the craft is at vertical points n*res above \
        the profile starting height and the corrosponding base values
     """
-    # Use negative pressure so that the max of the data list is the peak
+    is_pressure = new_res.dimensionality == units.Pa.dimensionality
 
-    # Change indices to a 2-tuple with indices instead of times, start and end
+    if base_start is not None and (base_start.dimensionality
+                                   != new_res.dimensionality):
+        raise ValueError(
+            f'base_start {base_start} is not in the dimension of the grid '
+            f'resolution {new_res}')
+
+    # np.arange below steps in bare magnitudes, so everything has to be in
+    # base's units first - a resolution of 5 hPa against a barometer in Pa
+    # stepped 5 Pa.
+    new_res = new_res.to(base.units)
+    if base_start is not None:
+        base_start = base_start.to(base.units)
+
+    # Change indices to a 2-tuple with sample indices instead of times
     if indices[0] is None:
-        indices = (0, len(base))
+        indices = (0, len(base) - 1)
     else:
-        a = list(base_times).index(indices[0])
-        if ascent:
-            b = list(base_times).index(indices[1])
-        else:
-            b = list(base_times).index(indices[2])
-        indices = (a, b)
+        if len(indices) == 3:
+            indices = (indices[0], indices[1]) if ascent \
+                else (indices[1], indices[2])
+        indices = (nearest_index(base_times, indices[0]),
+                   nearest_index(base_times, indices[1]))
 
-    if new_res.dimensionality == units.Pa.dimensionality:
+    # Use negative pressure so that the vertical coordinate increases upward
+    if is_pressure:
         base = -1*base
         if base_start is not None:
             base_start = -1*base_start
 
+    # bottom and top of the leg, in sample indices
+    lowest, highest = (indices[0], indices[1]) if ascent \
+        else (indices[1], indices[0])
+
     # Regrid base
     if base_start is None:
-        new_base = np.arange((base[indices[0]] + 0.5*new_res).magnitude,
-                             (base[indices[1]] - 0.5*new_res).magnitude,
+        floor = base[lowest]
+    else:
+        floor = base_start
+    ceiling = base[highest]
+
+    if base_start is None:
+        new_base = np.arange((floor + 0.5*new_res).magnitude,
+                             (ceiling - 0.5*new_res).magnitude,
                              new_res.magnitude)
-        base_edges = np.arange((base[indices[0]]).magnitude,
-                             (base[indices[1]]).magnitude,
-                             new_res.magnitude)
+        base_edges = np.arange(floor.magnitude, ceiling.magnitude,
+                               new_res.magnitude)
     else:
         new_base = np.arange((base_start + 0.5*new_res).magnitude,
-                             (base[indices[1]] - 0.5 * new_res).magnitude,
+                             (ceiling - 0.5 * new_res).magnitude,
                              new_res.magnitude)
-        base_edges = np.arange(base_start.magnitude,
-                              base[indices[1]].magnitude,
-                              new_res.magnitude)
+        base_edges = np.arange(base_start.magnitude, ceiling.magnitude,
+                               new_res.magnitude)
 
     new_base = np.array(new_base) * base.units
     base_edges = np.array(base_edges) * base.units
 
-    # Find the times where the new_base values occur in the profile
-    ind_in_grid = []
-    i = indices[0]
-    for elem in new_base:
-        # Bound check first: i can be advanced past indices[1] by the
-        # increment below, and `and` does not short-circuit a subscript
-        # written on its left, so the original order raised IndexError
-        # when a profile ran to the last sample in the file.
-        while i < indices[1] and base[i] < elem:
-            i += 1
-        ind_in_grid.append(i)
-        i += 1
+    # Find the times where the levels and edges occur in the profile
+    if ascent:
+        new_times = _times_at_levels(base, base_times, indices[0],
+                                     indices[1], new_base)
+        time_edges = _times_at_levels(base, base_times, indices[0],
+                                      indices[1], base_edges)
+    else:
+        # Walk the leg backwards in time, which is an ascent in the
+        # vertical coordinate, then put everything back in flight order.
+        span = slice(indices[0], indices[1] + 1)
+        flipped_base = base[span][::-1]
+        flipped_times = list(base_times[span])[::-1]
+        last = len(flipped_times) - 1
+        new_times = _times_at_levels(flipped_base, flipped_times, 0, last,
+                                     new_base)[::-1]
+        time_edges = _times_at_levels(flipped_base, flipped_times, 0, last,
+                                      base_edges)[::-1]
+        new_base = new_base[::-1]
+        base_edges = base_edges[::-1]
 
-    new_times = [base_times[i] for i in ind_in_grid]
-
-    # Find the times where the base_edges values occur in the profile
-    ind_in_grid = []
-    i = indices[0]
-    for elem in base_edges:
-        # Bound check first: i can be advanced past indices[1] by the
-        # increment below, and `and` does not short-circuit a subscript
-        # written on its left, so the original order raised IndexError
-        # when a profile ran to the last sample in the file.
-        while i < indices[1] and base[i] < elem:
-            i += 1
-        ind_in_grid.append(i)
-        i += 1
-
-    time_edges = [base_times[i] for i in ind_in_grid]
-
-    if new_res.dimensionality == units.Pa.dimensionality:
+    if is_pressure:
         new_base = -1*new_base
         base_edges = -1*base_edges
 
@@ -251,10 +372,33 @@ def regrid_base(base=None, base_times=None, new_res=None, ascent=True,
     return (new_times, new_base, time_edges, base_edges)
 
 
+def _bin_indices(data_times, gridded_times):
+    """ Yield, for each bin between consecutive gridded_times, the indices of
+    the samples in it.
+
+    This is the one binning rule used for every gridded variable, so they
+    all have ``len(gridded_times) - 1`` bins with the same boundaries: bin i
+    is the half-open interval (gridded_times[i], gridded_times[i+1]]. A bin
+    with no samples yields an empty index array rather than being skipped.
+
+    :param np.Array<Datetime> data_times: Times coresponding to the data
+    :param np.Array<Datetime> gridded_times: The times returned by regrid_base
+    :rtype: generator of np.Array<int>
+    """
+    # Built once, not once per bin.
+    times = np.array(data_times)
+    for i in range(len(gridded_times) - 1):
+        in_bin = (times > gridded_times[i]) & (times <= gridded_times[i + 1])
+        yield np.where(in_bin)[0]
+
+
 def regrid_data(data=None, data_times=None, gridded_times=None, units=None):
     """ Returns data interpolated to an evenly spaced array based on
     gridded_times.
 
+    Bins are (gridded_times[i], gridded_times[i+1]]; a bin containing no
+    samples is NaN.
+
     :param np.Array<Quantity> data: a non-base variable (i.e. not yor chosen \
        vertical coordinate)
     :param np.Array<Datetime> data_times: Times coresponding to data
@@ -263,103 +407,44 @@ def regrid_data(data=None, data_times=None, gridded_times=None, units=None):
     :rtype: np.Array<Quantity>
     :return: gridded_data
     """
-
-    #
-    # Average around selected points
-    #
-    data_index = 0  # This tracks the most recent data element processed
-
+    magnitudes = data.magnitude
     gridded_data = []
-    for i in range(len(gridded_times)-1):
-        #
-        # Find the data indices in the specified time range
-        #
-        start_time = gridded_times[i]
-        end_time = gridded_times[i+1]
-        data_seg_start_ind = None
-        data_seg_end_ind = None
+    # An all-NaN or empty bin is NaN by design; the mean of nothing warns.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        for foo in _bin_indices(data_times, gridded_times):
+            try:
+                gridded_data.append(np.nanmean(magnitudes[foo]))
+            except IndexError:
+                raise ValueError(
+                    "The data time array should be the same length as the "
+                    "data itself") from None
 
-        try:
-            foo = np.where((np.array(data_times) > start_time) & (np.array(data_times) <= end_time))
-            gridded_data.append(np.nanmean(data.magnitude[foo]))
-        except IndexError:
-            print("Something is really wrong. The data time array should be the same length as the data itself")
-            sys.exit()
-
-        # while data_index < len(data):
-        #     if data_times[data_index] >= start_time:
-        #         data_seg_start_ind = data_index
-        #         break
-        #     data_index += 1
-        #
-        # while data_index < len(data):
-        #     if data_index == len(data_times):
-        #         data_seg_end_ind = data_index
-        #         break
-        #
-        #     if data_times[data_index] >= end_time:
-        #         data_seg_end_ind = data_index
-        #         break
-        #     data_index += 1
-
-        # Calculate and store the segment mean
-        # if data_seg_start_ind is not None and data_seg_end_ind is not None:
-        #     gridded_data.append(np.nanmean(data.magnitude[data_seg_start_ind:
-        #                                    data_seg_end_ind]))
-
-
-
-    gridded_data = np.array(gridded_data) * data.units
-
-    return (gridded_data)
+    return np.array(gridded_data) * data.units
 
 
 def regrid_data_group(data=None, data_times=None, gridded_times=None, units=None):
-    """ Returns data interpolated to an evenly spaced array based on
-    gridded_times.
+    """ Yield the samples in each bin between consecutive gridded_times.
+
+    Uses the same bins as :func:`regrid_data` - (start, end], one per pair
+    of gridded times, empty bins included - so a variable gridded from these
+    groups has the same length and boundaries as every other variable.
 
     :param np.Array<Quantity> data: a non-base variable (i.e. not yor chosen \
        vertical coordinate)
     :param np.Array<Datetime> data_times: Times coresponding to data
     :param pint.UnitRegistry units: The unit registry defined in Profile
     :param np.Array<Datetime> gridded_times: The times returned by regrid_base
-    :rtype: np.Array<Quantity>
-    :return: gridded_data
+    :rtype: generator of dict
+    :return: dicts with start_time, end_time and the bin's values
     """
+    for i, foo in enumerate(_bin_indices(data_times, gridded_times)):
+        yield {
+            'start_time': gridded_times[i],
+            'end_time': gridded_times[i + 1],
+            'values': data[foo]
+        }
 
-    #
-    # Average around selected points
-    #
-    data_index = 0  # This tracks the most recent data element processed
-
-    for i in range(len(gridded_times)-1):
-        #
-        # Find the data indices in the specified time range
-        #
-        start_time = gridded_times[i]
-        end_time = gridded_times[i+1]
-        data_seg_start_ind = None
-        data_seg_end_ind = None
-
-        while data_index < len(data):
-            if data_times[data_index] >= start_time:
-                data_seg_start_ind = data_index
-                break
-            data_index += 1
-
-        while data_index < len(data):
-            if data_times[data_index] >= end_time:
-                data_seg_end_ind = data_index
-                break
-            data_index += 1
-
-        # Calculate and store the segment mean
-        if data_seg_start_ind is not None and data_seg_end_ind is not None:
-            yield {
-                'start_time': start_time,
-                'end_time': end_time,
-                'values': data[data_seg_start_ind:data_seg_end_ind]
-            }
 
 def regrid_data_group_interp(data=None, data_times=None, gridded_times=None, units=None):
     """ Returns data interpolated to an evenly spaced array based on
@@ -403,24 +488,43 @@ def regrid_data_group_interp(data=None, data_times=None, gridded_times=None, uni
             }
 
 
-def temp_calib(resistance, sn):
-    """ Converts resistance to temperature using the coefficients for the \
-       sensor specified OR generalized coefficients if the serial number (sn)\
-       is not recognized.
+def steinhart_hart(resistance, coefs):
+    """ Resistance to temperature with one coefficient row.
 
-    :param list<Quantity> resistance: resistances recorded by temperature \
-       sensors
-    :param int sn: the serial number of the sensor reporting
+    :param list<Quantity> resistance: resistances recorded by a thermistor
+    :param dict coefs: a MasterCoefList row with A, B and C
     :rtype: list<Quantity>
     :return: list of temperatures in K
     """
-    coefs = get_coef_manager().get_coefs("Imet", sn)
     a = float(coefs["A"])
     b = float(coefs["B"])
     c = float(coefs["C"])
 
-    return np.power(np.add(np.add(b * np.log(resistance), a),
-                    c * np.power(np.log(resistance), 3)), -1)
+    # A zero or negative resistance (a dead channel) is inf/NaN by design.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return np.power(np.add(np.add(b * np.log(resistance), a),
+                        c * np.power(np.log(resistance), 3)), -1)
+
+
+def temp_calib(resistance, sn, source=None, when=None):
+    """ Converts resistance to temperature using the coefficients for the \
+       sensor specified.
+
+    Prefer profiles.calibration.calibrate_temperature, which takes the
+    flight's calibration source. When no ``source`` is given this falls back
+    to the deprecated process-wide manager, which is how it always behaved.
+
+    :param list<Quantity> resistance: resistances recorded by temperature \
+       sensors
+    :param int sn: the serial number of the sensor reporting
+    :param source: a CalibrationSource to look the coefficients up in
+    :param when: flight time, to select among dated coefficient rows
+    :rtype: list<Quantity>
+    :return: list of temperatures in K
+    """
+    if source is None:
+        source = get_coef_manager()
+    return steinhart_hart(resistance, source.get_coefs("Imet", sn, when=when))
 
 
 def rh_calib(raw, sn):
@@ -452,7 +556,7 @@ def rh_calib(raw, sn):
     return raw
 
 
-def get_place_from_lat_lon(lat, lon, zoom=16):
+def get_place_from_lat_lon(lat, lon, zoom=16, timeout=5):
     """
     Pings the nominatim API to get a place name from a lat/lon pair.
 
@@ -464,6 +568,7 @@ def get_place_from_lat_lon(lat, lon, zoom=16):
     :param lat:
     :param lon:
     :param zoom:
+    :param timeout: seconds to wait before giving up
     :return:
     """
 
@@ -477,7 +582,11 @@ def get_place_from_lat_lon(lat, lon, zoom=16):
     }
 
     # format query string and return query value
-    result = requests.get(url, params)
+    # Nominatim's usage policy requires an identifying User-Agent.
+    from profiles import __version__
+    headers = {'User-Agent': f'profiles-uas/{__version__}'}
+    result = requests.get(url, params, headers=headers, timeout=timeout)
+    result.raise_for_status()
 
     return ','.join(result.json()['display_name'].split(',')[:-1])
 
@@ -569,6 +678,7 @@ def identify_profile_peaks(alts, alt_times, window=None,
 
     # Check the bounds if desired
     if confirm_bounds:
+        import matplotlib.pyplot as plt
         # User verifies selection
         fig2 = plt.figure()
         plt.plot(alts, figure=fig2)
@@ -622,6 +732,10 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
     isDone = False
     # Get the starting height from the user
     if profile_start_height is None:
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from pandas.plotting import register_matplotlib_converters
+        register_matplotlib_converters()
         fig1 = plt.figure()
         plt.plot(alt_times, alts, figure=fig1)
         plt.grid(axis="y", which="both", figure=fig1)
@@ -690,6 +804,7 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
                     peak_ind = list(alts).index(np.nanmax(alts[start_ind_asc:end_ind_des]),
                                                 start_ind_asc, end_ind_des)
                 if confirm_bounds:
+                    import matplotlib.pyplot as plt
                     # User verifies selection
                     fig2 = plt.figure()
                     plt.plot(range(len(alt_times)), alts, figure=fig2)
@@ -711,13 +826,23 @@ def identify_profile(alts, alt_times, confirm_bounds=True,
                         break
                     elif valid in "nNnoNo":
                         plt.close()
-                        to_return = identify_profile(alts, alt_times,
-                                                     to_return)
+                        # Re-ask for the start height: that is the one
+                        # thing the user can change to get a different
+                        # answer. to_return used to land positionally in
+                        # confirm_bounds.
+                        to_return = identify_profile(
+                            alts, alt_times, confirm_bounds=confirm_bounds,
+                            profile_start_height=None, to_return=to_return)
                     else:
                         print("Invalid choice. Re-selecting profile...")
                         plt.close()
-                        to_return = identify_profile(alts, alt_times,
-                                                     to_return)
+                        # Re-ask for the start height: that is the one
+                        # thing the user can change to get a different
+                        # answer. to_return used to land positionally in
+                        # confirm_bounds.
+                        to_return = identify_profile(
+                            alts, alt_times, confirm_bounds=confirm_bounds,
+                            profile_start_height=None, to_return=to_return)
                 else:
                     isDone = True
                     break

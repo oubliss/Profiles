@@ -27,7 +27,8 @@ config = ProcessingConfig(
     # numbers with different wind coefficients. Say which one.
     tail_number=AIRCRAFT,
     wind_algorithm='linear',
-    # Peak detection reports 2 s, 1 m wiggles as profiles; drop them.
+    # Short wiggles are already dropped at leg detection (min_leg_extent,
+    # 50 m by default); this is a backstop against sparse profiles.
     min_levels=20,
 )
 

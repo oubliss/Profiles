@@ -8,7 +8,11 @@ jobs:
 
   build_docs_job:
     runs-on: ubuntu-latest
-    container: debian:buster-slim
+    # python:3.12 matches the supported range in setup.py (>=3.10). The old
+    # debian:buster image is end of life (its apt repos moved to
+    # archive.debian.org) and ships Python 3.7, which cannot install this
+    # package.
+    container: python:3.12-slim-bookworm
 
     steps:
 
