@@ -109,3 +109,49 @@ def test_terminates_on_pathological_input():
         flags = _bias(ensemble(list(offsets), n=50), max_abs_error=0.25)
         assert len(flags) == n_sensors
         assert set(np.unique(flags)) <= {GOOD, BIAS}
+
+
+class TestEmptySensorsAreExcluded:
+    """The CopterSonde logs three thermistors in four slots.
+
+    Including the unfitted slot in the ensemble comparison made _bias see a
+    ~283 K spread; because rejection stops at two survivors it discarded
+    the two real sensors and kept the two empty ones, so temperature came
+    out entirely NaN.
+    """
+
+    def real_and_empty(self):
+        data = ensemble([0.0, 0.05], n=500, noise=0.9, seed=7)
+        return [np.zeros(500), data[0], data[1], np.zeros(500)]
+
+    def test_empty_slots_do_not_reject_real_sensors(self):
+        flags = qc(self.real_and_empty(), 0.25, 0.1)
+        assert flags == [EMPTY, GOOD, GOOD, EMPTY]
+
+    def test_result_matches_running_on_the_populated_subset(self):
+        full = self.real_and_empty()
+        populated = [full[1], full[2]]
+        assert qc(full, 0.25, 0.1)[1:3] == qc(populated, 0.25, 0.1)
+
+    def test_all_nan_sensor_counts_as_empty(self):
+        data = ensemble([0.0, 0.05, -0.05], noise=0.01, seed=8)
+        data.append(np.full(500, np.nan))
+        assert qc(data, 0.25, 0.1)[3] == EMPTY
+
+    def test_a_lone_populated_sensor_is_accepted(self):
+        data = [np.zeros(500), ensemble([0.0], noise=0.5, seed=9)[0],
+                np.zeros(500), np.zeros(500)]
+        assert qc(data, 0.25, 0.1) == [EMPTY, GOOD, EMPTY, EMPTY]
+
+    def test_a_real_outlier_is_still_caught_alongside_empty_slots(self):
+        data = ensemble([0.0, 0.02, 6.0], n=500, noise=0.01, seed=10)
+        flags = qc([np.zeros(500)] + data, 0.25, 0.1)
+        assert flags[0] == EMPTY
+        assert flags[3] == BIAS
+        assert flags[1] == flags[2] == GOOD
+
+    def test_is_populated(self):
+        from profiles.qc import is_populated
+        assert is_populated(np.array([1.0, 2.0]))
+        assert not is_populated(np.zeros(5))
+        assert not is_populated(np.full(5, np.nan))

@@ -105,46 +105,55 @@ def _s_dev(data, max_abs_error):
     return _reject_outliers(sdevs, max_abs_error, flag=3)
 
 
-def qc(data, max_bias, max_variance):
-    """ Determines which sensors are not reliable from a given set. Be sure
-       to only include like sensors (not both temperature inside and outside
-                                     the CO2 sensor) in Data.
+def is_populated(series):
+    """ Does this sensor position carry real measurements?
 
-    :param list<Quantity> data: a list containing one list for each sensor
-       in the ensemble, i.e. all external RH sensors
-    :param Quantity max_bias: the maximum absolute difference between the \
-       mean of one sensor and the mean of all sensors of that type. This \
-       should be determined experimentally for each type of sensor.
-    :param Quantity max_variance: the maximum absolute difference between the \
-       standard deviation of one sensor and the standard deviation of all \
-       sensors of that type. This should be determined experimentally for \
-       each type of sensor.
-    :rtype: list<int> of length len(data)
-    :return: list containing 0 in the position of each "good" sensor, 2 in the
-       position of each sensor flagged for bias, 3 in the position of each
-       sensor flagged for response time, and 4 in the position of each flagged as empty
+    An unfitted position is logged as zeros, and a sensor that never
+    reported is all NaN. Either way it has nothing to contribute to an
+    ensemble comparison.
+
+    :param series: one sensor's readings
+    :rtype: bool
     """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        mean = np.nanmean(series)
+    return bool(np.isfinite(mean)) and mean != 0
 
+
+def qc(data, max_bias, max_variance):
+    """ Flag sensors in an ensemble that disagree with the rest.
+
+    Only populated sensors take part in the comparison. Including the
+    unfitted positions was catastrophic: the CopterSonde logs three
+    thermistors in four slots, so every flight had an all-zero sensor in
+    the ensemble. _bias then saw a ~283 K spread and _s_dev a ~0.9 K one,
+    and because rejection stops at two survivors it threw out the two real
+    sensors and kept the two empty ones. Temperature came out entirely NaN
+    on every flight where both remaining positions were empty.
+
+    :param list<Quantity> data: one series per sensor, all the same type
+    :param max_bias: largest tolerated spread across the sensors' means
+    :param max_variance: largest tolerated spread across their standard
+       deviations
+    :rtype: list<int> of length len(data)
+    :return: GOOD, BIAS, VARIABILITY or EMPTY for each sensor
+    """
     if isinstance(data, u.Quantity):
         data = data.magnitude
 
-    good_nonempty = [1] * len(data)
-    for i in range(len(data)):
-        if np.nanmean(data[i]) == 0:
-            good_nonempty[i] = 4
-        else:
-            good_nonempty[i] = 0
+    flags = [EMPTY if not is_populated(series) else GOOD for series in data]
 
-    # _bias: returns list of length number of sensors; 0 means data is good
-    good_means = _bias(data, max_bias)
-    # _s_dev: returns list of length number of sensors; 0 means data is good
-    good_sdevs = _s_dev(data, max_variance)
+    populated = [i for i, flag in enumerate(flags) if flag == GOOD]
+    if len(populated) < 2:
+        # Nothing to compare against; a lone sensor is accepted as-is.
+        return flags
 
-    combined_sensor_flags = [1] * len(data)
+    subset = [data[i] for i in populated]
+    bias_flags = _bias(subset, max_bias)
+    sdev_flags = _s_dev(subset, max_variance)
 
-    # Combine good_means and good_sdevs, leaving 0 only where the sensor
-    # passed both tests.
-    for i in range(len(data)):
-        combined_sensor_flags[i] = max([good_means[i], good_sdevs[i], good_nonempty[i]])
+    for position, index in enumerate(populated):
+        flags[index] = int(max(bias_flags[position], sdev_flags[position]))
 
-    return combined_sensor_flags
+    return flags
