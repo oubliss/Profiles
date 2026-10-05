@@ -110,3 +110,55 @@ def test_default_config_is_usable():
     assert config.resolution == 10
     assert config.res_units == 'm'
     assert config.profile_start_height is None
+
+
+def test_default_config_auto_detects_calibration():
+    assert ProcessingConfig().calibration == 'auto'
+
+
+def test_reference_flight_resolves_to_table_calibration(bin_path):
+    """It reports serial numbers, so it predates onboard calibration."""
+    from profiles.Coef_Manager import TableCalibration
+    from profiles.flight import FlightLog
+
+    flight = FlightLog(bin_path, nc_level=None)
+    assert isinstance(flight.calibration_source, TableCalibration)
+    assert flight.calibration_source.temperature_from == 'resistance'
+
+
+def test_calibration_mode_reaches_the_flight(bin_path, config):
+    """A forced mode must survive the config -> FlightLog -> Profile hop."""
+    import dataclasses
+
+    from profiles.Coef_Manager import OnboardCalibration
+    from profiles.processing import profiles_from_flight
+
+    forced = dataclasses.replace(config, calibration='onboard',
+                                 min_levels=5)
+    profiles = profiles_from_flight(bin_path, forced)
+    assert profiles, 'expected at least one profile'
+
+    profile = profiles[0]
+    assert isinstance(profile._raw_profile.calibration_source,
+                      OnboardCalibration)
+
+    profile.compute_thermo()
+    assert 'onboard' in profile.calibration_record['temperature_source']
+
+
+def test_forcing_onboard_changes_the_temperature(bin_path, config):
+    """The two paths must actually differ, or the switch means nothing."""
+    import dataclasses
+
+    import numpy as np
+
+    from profiles.processing import profiles_from_flight
+
+    def first_temp(mode):
+        cfg = dataclasses.replace(config, calibration=mode, min_levels=5)
+        profile = profiles_from_flight(bin_path, cfg)[0]
+        return profile.compute_thermo().temp.magnitude
+
+    table, onboard = first_temp('table'), first_temp('onboard')
+    assert not np.allclose(table, onboard, equal_nan=True), (
+        'table and onboard calibration produced identical temperature')

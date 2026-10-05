@@ -462,7 +462,8 @@ class Profile():
         serial_numbers = data['serial_numbers']
 
         temp_raw = calibration.calibrate_temperature(
-            data, serial_numbers, record=self.calibration_record)
+            data, serial_numbers, record=self.calibration_record,
+            source=self._raw_profile.calibration_source)
         rh_raw = calibration.calibrate_humidity(data, serial_numbers)
 
         self.temp_flags = qc.qc(temp_raw, *self.qc_thresholds['temp'])

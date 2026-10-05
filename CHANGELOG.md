@@ -50,6 +50,51 @@ Rejection is now a single shared `_reject_outliers` helper: while the spread
 across accepted sensors exceeds the threshold, drop the one furthest from
 their mean and re-test, never going below two survivors.
 
+**Empty sensor slots poisoned the ensemble.** The CopterSonde logs three
+thermistors in four slots, so every flight carried an all-zero sensor into
+the comparison above. `_bias` saw a ~283 K spread and `_s_dev` a ~0.9 K one,
+and because rejection stops at two survivors it discarded the two *real*
+sensors and kept the two empty ones. `qc()` now classifies each position
+first — a series whose mean is zero or non-finite is `EMPTY` — and compares
+only the populated subset.
+
+Over the 25 OK3DM flights, 22 are bit-identical and 3 changed. Those three
+(2026-05-19) have only two populated thermistors and were losing temperature
+entirely:
+
+| | old flags | new flags | temp |
+|---|---|---|---|
+| flight2859 p0 | `[4 3 3 4]` | `[4 0 0 4]` | NaN 36/36 → 0/36 |
+| flight2860 p0 | `[4 3 3 4]` | `[4 0 0 4]` | NaN 39/39 → 0/39 |
+| flight2861 p0 | `[4 3 3 4]` | `[4 0 0 4]` | NaN 39/39 → 0/39 |
+
+RH recovered on 2860 and 2861 too. The reference flight is unchanged — it has
+three populated sensors, which is why the characterization tests did not
+catch this.
+
+**Onboard-calibrated temperature was being recomputed with generic
+coefficients.** `calibrate_temperature` chose its path by looking for
+resistances in the log: present, recompute via Steinhart-Hart. That was right
+while only legacy logs carried resistances. Current firmware logs resistances
+*and* the temperature it already calibrated onboard, so the recompute branch
+always won — and those logs no longer carry `USER_SENSORS` parameters, so
+every serial resolved to `0` and the lookup fell to the catch-all `Imet,0`
+row. One shared transfer function was applied to all four thermistors.
+
+On flight2859 that moved imet2 by **+0.100 K** and imet3 by **−0.109 K**.
+More damaging than the offsets, it compressed the inter-sensor spread from
+**0.273 K to 0.064 K** — manufacturing agreement between sensors and feeding
+the ensemble QC, whose bias threshold is 0.25 K, a flattened signal.
+
+The choice now belongs to the flight's `CalibrationSource`
+(`temperature_from`), resolved from whether the log reports serial numbers
+and overridable with `ProcessingConfig(calibration='table'|'onboard')`.
+`OnboardCalibration` performs no arithmetic on temperature — that is the
+point — and refuses thermodynamic table lookups rather than returning generic
+coefficients. Wind remains a table lookup; the airframe calibration is per
+tail number and is not applied onboard. The path taken is recorded in the
+output as `coef_temperature_source`.
+
 ### Fixed
 
 - `import profiles` no longer reads the filesystem. `utils.coef_manager` was

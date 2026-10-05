@@ -70,6 +70,33 @@ cd dronelogbook && pip install -e . && cd ..
 python dronelogbook/scripts/sync_dlb.py
 ```
 
+## Calibration
+
+Which path temperature takes is a property of the *flight*, not of what the
+log happens to contain:
+
+| the log | source | temperature |
+|---|---|---|
+| reports sensor serial numbers | `TableCalibration` | Steinhart-Hart from logged resistance |
+| reports none | `OnboardCalibration` | `IMET.T` as logged, untouched |
+
+Current firmware calibrates the thermistors in flight and logs the result,
+so there is nothing left to apply — `OnboardCalibration` deliberately does
+no arithmetic, and raises rather than returning generic coefficients if
+asked for a thermodynamic lookup. Wind is a table lookup either way: the
+airframe calibration is per tail number and is not applied onboard.
+
+Detection is automatic. Override it when a log is wrong about itself:
+
+```python
+ProcessingConfig(calibration='table')    # or 'onboard', default 'auto'
+```
+
+The path taken is written to c1 files as `coef_temperature_source`.
+
+Bias corrections (`profiles/bias.py`) are separate and remain opt-in; they
+apply on top of either source.
+
 ## Processing levels
 
 | level | what it is |

@@ -9,13 +9,16 @@ each grew its own copy.
 The original selected sensors by sniffing substrings out of the thermo_data
 dictionary's keys ("resi" in key, "temp" in key and "_" not in key, ...),
 which made the result depend on dictionary insertion order. The selection is
-explicit here; the outcome is unchanged because every CopterSonde log
-carries resistances.
+explicit here.
+
+Both copies also chose the temperature path by looking for resistances in
+the log. That choice now belongs to the flight's CalibrationSource - see
+calibrate_temperature.
 """
 import numpy as np
 
 import profiles.utils as utils
-from profiles import schema
+from profiles import Coef_Manager, schema
 
 
 def _sensor_series(thermo_data, prefix):
@@ -28,20 +31,40 @@ def _sensor_series(thermo_data, prefix):
     return series
 
 
-def calibrate_temperature(thermo_data, serial_numbers, record=None):
+def calibrate_temperature(thermo_data, serial_numbers, record=None,
+                          source=None):
     """ Per-sensor temperature in K.
 
-    Resistance is preferred where the log carries it, because the
-    Steinhart-Hart conversion is per-sensor and non-linear - it has to be
-    applied to each thermistor before any averaging. Logs without
-    resistances fall back to the temperature the autopilot recorded.
+    Which path is taken is decided by the calibration source, not by what
+    the log happens to contain. Under table calibration, resistance is
+    preferred because the Steinhart-Hart conversion is per-sensor and
+    non-linear - it has to be applied to each thermistor before any
+    averaging. Under onboard calibration the autopilot has already done
+    exactly that, per sensor, with the coefficients for the thermistor
+    actually fitted, so the logged temperature is taken as it stands.
+
+    Deciding by availability was wrong once firmware began logging both:
+    current logs carry resistances and calibrated temperatures, so the
+    resistance branch won, and with no serial numbers to look up it applied
+    the catch-all `Imet,0` coefficients to every sensor.
 
     :param dict thermo_data: as returned by FlightLog.thermo_data()
     :param dict serial_numbers: sensor serials, 0 where unknown
     :param dict record: if given, the coefficient row used for each sensor
        is stored here under 'imet<n>', for output provenance
+    :param source: a CalibrationSource. Resolved from the log's serial
+       numbers when omitted.
     :rtype: list[np.ndarray]
     """
+    if source is None:
+        source = Coef_Manager.source_for_flight(serial_numbers)
+
+    if source.temperature_from == 'logged':
+        if record is not None:
+            record['temperature_source'] = (
+                'calibrated onboard; IMET.T used as logged')
+        return _sensor_series(thermo_data, 'temp')
+
     resistances = _sensor_series(thermo_data, 'resi')
 
     if not resistances:

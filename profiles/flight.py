@@ -15,6 +15,7 @@ import profiles.readers as readers
 import profiles.parsing as parsing
 from profiles.io import naming
 import profiles.calibration as calibration
+from profiles import Coef_Manager
 from profiles.retrievals import wind as wind_retrieval
 from profiles import schema
 import os
@@ -68,7 +69,8 @@ class FlightLog():
     :var Meta meta: processes metadata
     """
 
-    def __init__(self, file_path, dev=False, nc_level='low', metadata=None, tail_number=None):
+    def __init__(self, file_path, dev=False, nc_level='low', metadata=None,
+                 tail_number=None, calibration='auto'):
         """ Creates a FlightLog and reads in data in the appropriate
         format. *If meta_path_flight or meta_path_header includes scoop_id,
         the scoop_id constructor parameter will be overwritten*
@@ -82,6 +84,9 @@ class FlightLog():
            and Wind Profile, specify 'low'. For no NetCDF files, specify \
            'none'.
         :param profiles.Meta metadata: Meta Object
+        :param str calibration: 'auto' reads the log to decide whether
+           the thermistors were calibrated onboard or need the
+           coefficient tables; 'table' and 'onboard' force one.
         """
         self.meta = None
         if metadata is not None:
@@ -104,6 +109,8 @@ class FlightLog():
         self.calib_dir = None
         self.file_type = None
         self.tail_number = tail_number
+        self._calibration_mode = calibration
+        self._calibration_source = None
 
         # Set dummy serial numbers - these will allow the file 
         # to be processed even if the JSON and checklist files 
@@ -143,6 +150,25 @@ class FlightLog():
 
 
 
+    @property
+    def calibration_source(self):
+        """ Where this flight's calibrated values come from.
+
+        Resolved once from the log's serial numbers, or forced by the
+        ``calibration`` constructor argument. Assigning to it overrides
+        both.
+
+        :rtype: profiles.Coef_Manager.CalibrationSource
+        """
+        if self._calibration_source is None:
+            self._calibration_source = Coef_Manager.source_for_flight(
+                self.serial_numbers, mode=self._calibration_mode)
+        return self._calibration_source
+
+    @calibration_source.setter
+    def calibration_source(self, source):
+        self._calibration_source = source
+
     def apply_thermo_coeffs(self):
         """ Calibrate every temperature and humidity sensor individually.
 
@@ -153,7 +179,7 @@ class FlightLog():
         serial_numbers = thermo_data['serial_numbers']
 
         self.calib_temp = calibration.calibrate_temperature(
-            thermo_data, serial_numbers)
+            thermo_data, serial_numbers, source=self.calibration_source)
         self.calib_rh = calibration.calibrate_humidity(
             thermo_data, serial_numbers)
 

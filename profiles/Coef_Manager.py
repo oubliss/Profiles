@@ -29,7 +29,15 @@ class CalibrationSource(ABC):
 
     Two implementations. Which applies depends on the firmware the flight
     was flown with, not on a preference.
+
+    :cvar str temperature_from: 'resistance' to apply Steinhart-Hart to the
+       logged resistances, 'logged' to take IMET.T as it stands. This is a
+       property of the flight, not of the data present in the log: current
+       logs carry resistances *and* calibrated temperatures, so picking by
+       what is available silently recomputes already-calibrated values.
     """
+
+    temperature_from = 'resistance'
 
     @abstractmethod
     def get_tail_n(self, copterID, when=None):
@@ -121,10 +129,40 @@ class OnboardCalibration(CalibrationSource):
 
     Wind is still a table lookup: the airframe calibration is per tail
     number and is not applied onboard.
+
+    This source does no arithmetic on temperature, which is the point: the
+    calibration has already happened. Its job is to stop the pipeline
+    redoing it. Before this existed, a current-generation flight still took
+    the resistance path, and because those logs report no serial numbers
+    every lookup fell to the catch-all `Imet,0` row - one shared
+    Steinhart-Hart curve applied to all four thermistors. On
+    KAEFS_flight2859 that shifted imet2 by +0.100 K and imet3 by -0.109 K
+    and, worse, compressed the inter-sensor spread from 0.273 K to 0.064 K,
+    manufacturing agreement between sensors and feeding the ensemble QC a
+    flattened signal.
     """
 
+    temperature_from = 'logged'
+
     def __init__(self, directory=None):
-        self._table = TableCalibration(directory)
+        self._directory = directory
+        self._table_source = None
+
+    @property
+    def _table(self):
+        """ The wind/tail-number tables, read only if something asks.
+
+        Built lazily so that processing temperature from an onboard-
+        calibrated flight needs no coefficient directory at all - which is
+        the whole claim this class makes.
+        """
+        if self._table_source is None:
+            self._table_source = TableCalibration(self._directory)
+        return self._table_source
+
+    @property
+    def directory(self):
+        return self._table.directory
 
     def get_tail_n(self, copterID, when=None):
         return self._table.get_tail_n(copterID, when=when)
@@ -142,7 +180,21 @@ class OnboardCalibration(CalibrationSource):
         return self._table.get_sensors(scoopID)
 
 
-def source_for_flight(serial_numbers, directory=None):
+CALIBRATION_MODES = ('auto', 'table', 'onboard')
+
+
+def logs_sensor_serials(serial_numbers):
+    """ Whether the log names the thermodynamic sensors fitted to it.
+
+    :param dict serial_numbers: as parsed from the log's PARM records
+    :rtype: bool
+    """
+    return any(serial_numbers.get(f'{kind}{n}')
+               for kind in ('imet', 'rh')
+               for n in range(1, 5))
+
+
+def source_for_flight(serial_numbers, directory=None, mode='auto'):
     """ Pick the calibration source a flight's log implies.
 
     A log that reports sensor serial numbers was flown with firmware that
@@ -150,12 +202,21 @@ def source_for_flight(serial_numbers, directory=None):
 
     :param dict serial_numbers: as parsed from the log's PARM records
     :param directory: coefficient directory, or None to resolve it
+    :param str mode: 'auto' to decide from the log, or 'table'/'onboard'
+       to force one. Forcing is for logs that are wrong about themselves -
+       a reprocess of an early onboard-calibrated flight whose firmware
+       still wrote the parameters, say.
     :rtype: CalibrationSource
     """
-    logged_any = any(serial_numbers.get(f'{kind}{n}')
-                     for kind in ('imet', 'rh')
-                     for n in range(1, 5))
-    return (TableCalibration(directory) if logged_any
+    if mode not in CALIBRATION_MODES:
+        raise ValueError(
+            f'unknown calibration mode {mode!r}; '
+            f'available: {list(CALIBRATION_MODES)}')
+
+    if mode == 'auto':
+        mode = 'table' if logs_sensor_serials(serial_numbers) else 'onboard'
+
+    return (TableCalibration(directory) if mode == 'table'
             else OnboardCalibration(directory))
 
 

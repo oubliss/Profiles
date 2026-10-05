@@ -36,6 +36,9 @@ class ProcessingConfig:
     :var min_levels: discard profiles gridding to fewer levels than this.
        Peak detection reports spurious profiles from small wiggles at the
        top of real ones - see CHANGELOG.
+    :var calibration: 'auto' decides per flight from whether the log
+       reports sensor serial numbers; 'table' forces Steinhart-Hart from
+       logged resistance; 'onboard' takes IMET.T as logged.
     """
     resolution: float = 10
     res_units: str = 'm'
@@ -48,6 +51,7 @@ class ProcessingConfig:
     tail_number: Optional[str] = None
     wind_algorithm: str = 'linear'
     min_levels: int = 0
+    calibration: str = 'auto'
     #: Per-variable (max spread of sensor means, max spread of sensor
     #: standard deviations). None keeps Profile.DEFAULT_QC_THRESHOLDS.
     qc_thresholds: Optional[dict] = None
@@ -83,7 +87,13 @@ def profiles_from_flight(path, config, metadata=None, base_start=None,
     if flight is None:
         flight = FlightLog(path, config.dev, nc_level=config.nc_level,
                            metadata=metadata,
-                           tail_number=config.tail_number)
+                           tail_number=config.tail_number,
+                           calibration=config.calibration)
+    elif config.calibration != 'auto':
+        # The caller parsed the log themselves; the config still decides.
+        from profiles import Coef_Manager
+        flight.calibration_source = Coef_Manager.source_for_flight(
+            flight.serial_numbers, mode=config.calibration)
 
     legs = flight.find_legs(
         legacy=config.legacy_peak_id,

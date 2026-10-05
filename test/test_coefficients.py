@@ -186,3 +186,113 @@ class TestBiasCorrections:
     def test_unknown_correction_is_rejected(self):
         with pytest.raises(KeyError, match='unknown bias correction'):
             bias.get('nope')
+
+
+class TestTemperatureStrategy:
+    """Which temperature path a flight takes, and who decides.
+
+    The pipeline used to pick by sniffing the log for resistances. Current
+    firmware logs resistances *and* onboard-calibrated temperatures, so
+    that rule always chose to recompute - and with no serial numbers in
+    the log, every lookup fell to the catch-all `Imet,0` row, putting all
+    four thermistors through one shared Steinhart-Hart curve.
+    """
+
+    def thermo_data(self, resistances=True):
+        from profiles.unit_registry import units
+        data = {f'temp{n}': np.full(10, 290.0 + n) * units.kelvin
+                for n in range(1, 4)}
+        if resistances:
+            data.update({f'resi{n}': np.full(10, 10000.0 + n) * units.ohm
+                         for n in range(1, 4)})
+        return data
+
+    def serials(self, onboard=True):
+        base = {f'{kind}{n}': 0 for kind in ('imet', 'rh') for n in range(1, 5)}
+        if not onboard:
+            base['imet1'] = 62275
+        return base
+
+    def test_sources_declare_their_strategy(self):
+        assert TableCalibration(COEF_PATH).temperature_from == 'resistance'
+        assert OnboardCalibration(COEF_PATH).temperature_from == 'logged'
+
+    def test_onboard_returns_the_logged_temperature_untouched(self):
+        from profiles import calibration
+        data = self.thermo_data()
+        result = calibration.calibrate_temperature(
+            data, self.serials(), source=OnboardCalibration(COEF_PATH))
+        for n, series in enumerate(result, start=1):
+            assert np.allclose(series, 290.0 + n), (
+                'onboard calibration must not alter the logged temperature')
+
+    def test_table_source_recomputes_from_resistance(self):
+        from profiles import calibration
+        result = calibration.calibrate_temperature(
+            self.thermo_data(), self.serials(onboard=False),
+            source=TableCalibration(COEF_PATH))
+        assert not np.allclose(result[0], 291.0), (
+            'the table path should convert resistance, not pass temp through')
+
+    def test_resistances_present_no_longer_force_recomputation(self):
+        """The defect this wiring fixes."""
+        from profiles import calibration
+        data = self.thermo_data(resistances=True)
+        onboard = calibration.calibrate_temperature(
+            data, self.serials(), source=OnboardCalibration(COEF_PATH))
+        assert np.allclose(onboard[0], 291.0)
+
+    def test_auto_resolution_picks_onboard_for_a_serial_less_log(self):
+        from profiles import calibration
+        record = {}
+        calibration.calibrate_temperature(
+            self.thermo_data(), self.serials(), record=record,
+            source=source_for_flight(self.serials(), COEF_PATH))
+        assert 'onboard' in record['temperature_source']
+
+    def test_provenance_names_the_path_taken(self):
+        from profiles import calibration
+        for source, expected in ((OnboardCalibration(COEF_PATH), 'onboard'),
+                                 (TableCalibration(COEF_PATH),
+                                  'Steinhart-Hart')):
+            record = {}
+            calibration.calibrate_temperature(
+                self.thermo_data(), self.serials(onboard=False),
+                record=record, source=source)
+            assert expected in record['temperature_source']
+
+    def test_logs_without_resistances_still_fall_back(self):
+        from profiles import calibration
+        record = {}
+        result = calibration.calibrate_temperature(
+            self.thermo_data(resistances=False), self.serials(onboard=False),
+            record=record, source=TableCalibration(COEF_PATH))
+        assert np.allclose(result[0], 291.0)
+        assert 'no resistances' in record['temperature_source']
+
+    def test_mode_can_force_either_source(self):
+        onboard_log = self.serials()
+        assert isinstance(
+            source_for_flight(onboard_log, COEF_PATH, mode='table'),
+            TableCalibration)
+        assert isinstance(
+            source_for_flight(self.serials(onboard=False), COEF_PATH,
+                              mode='onboard'),
+            OnboardCalibration)
+
+    def test_unknown_mode_is_rejected(self):
+        with pytest.raises(ValueError, match='unknown calibration mode'):
+            source_for_flight(self.serials(), COEF_PATH, mode='magic')
+
+    def test_onboard_temperature_needs_no_coefficient_directory(self, tmp_path):
+        """The claim is that nothing is looked up; hold it to that."""
+        from profiles import calibration
+        source = OnboardCalibration(tmp_path / 'does-not-exist')
+        result = calibration.calibrate_temperature(
+            self.thermo_data(), self.serials(), source=source)
+        assert np.allclose(result[0], 291.0)
+
+    def test_onboard_wind_still_needs_the_tables(self, tmp_path):
+        source = OnboardCalibration(tmp_path / 'does-not-exist')
+        with pytest.raises(MissingCoefficients):
+            source.get_coefs('Wind', 'N934UA', 'E1')
